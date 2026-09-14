@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "1.0",
+  "workflowId": "minimax-h3-i2v",
+  "name": "MiniMax H3 首帧转视频",
+  "category": "image-to-video",
+  "description": "将一张静态首帧生成自然动态短视频。",
+  "difficulty": "easy",
+  "source": {
+    "name": "Example",
+    "url": ""
+  },
+  "capabilities": ["image-to-video", "video-generation"],
+  "recommendedFor": ["儿童动画", "人物动画", "动物动画", "风景动画"],
+  "notRecommendedFor": ["复杂多人互动", "超大幅度姿势变化"],
+  "inputs": [
+    {
+      "key": "firstFrame",
+      "label": "首帧图片",
+      "type": "image",
+      "required": true,
+      "purpose": "video-start-frame",
+      "description": "视频开始时的完整画面。",
+      "help": "建议主体清晰、构图完整，并与输出视频比例一致。",
+      "recommended": ["人物完整可见", "避免大量文字", "角色与场景已经确定"],
+      "accept": ["image/png", "image/jpeg", "image/webp"],
+      "mapping": {
+        "nodeId": "21",
+        "field": "image"
+      }
+    },
+    {
+      "key": "prompt",
+      "label": "视频提示词",
+      "type": "textarea",
+      "required": true,
+      "purpose": "prompt",
+      "description": "描述人物动作、环境动态、镜头运动与最终状态。",
+      "help": "尽量使用单一主动作，并明确起始状态与结束状态。",
+      "recommended": [],
+      "accept": [],
+      "mapping": {
+        "nodeId": "34",
+        "field": "text"
+      }
+    },
+    {
+      "key": "negativePrompt",
+      "label": "Negative Prompt",
+      "type": "textarea",
+      "required": false,
+      "purpose": "negative-prompt",
+      "description": "限制变形、角色漂移、文字和道具跳变。",
+      "help": "可由上层业务系统追加连续性锁定。",
+      "recommended": [],
+      "accept": [],
+      "mapping": {
+        "nodeId": "35",
+        "field": "text"
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "key": "duration",
+      "label": "视频时长",
+      "type": "number",
+      "default": 5,
+      "min": 3,
+      "max": 15,
+      "step": 0.5,
+      "unit": "秒",
+      "options": [],
+      "description": "按剧情镜头时长动态换算工作流帧数。",
+      "mapping": {
+        "strategy": "duration-to-frames"
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "seed",
+      "default": -1,
+      "options": [],
+      "description": "-1 表示每次随机；固定值便于效果对比。",
+      "mapping": {
+        "nodeId": "44",
+        "field": "seed"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "key": "video",
+      "type": "video",
+      "format": "mp4",
+      "mapping": {
+        "nodeId": "72",
+        "field": "filename_prefix"
+      }
+    }
+  ],
+  "dependencies": {
+    "models": [],
+    "customNodes": []
+  },
+  "runtime": {
+    "executionMode": "serial",
+    "durationPolicy": "dynamic",
+    "allowRetry": true,
+    "retryUnknown": false,
+    "preserveOriginalWorkflow": true,
+    "outputTimeout": 900
+  },
+  "guide": {
+    "summary": "上传首帧、填写动作 Prompt、选择时长后生成视频。",
+    "steps": ["上传视频开始画面", "填写人物动作与运镜 Prompt", "选择时长", "开始生成"],
+    "promptTips": ["明确唯一主要动作", "描述道具运动轨迹", "描述角色自然反应", "需要时加入轻微运镜"],
+    "warnings": ["多人场景更容易身份漂移", "大幅复杂动作建议拆镜头", "不要使用文字很多的首帧"]
+  }
+}
