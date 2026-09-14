@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from backend.db import Database
 from backend.models import WorkflowManifest
 from backend.workflow.analyzer import analyze_workflow
-from backend.workflow.manifest import WORKFLOW_ROOT, save_manifest
+from backend.workflow.manifest import LOCAL_WORKFLOW_ROOT, save_manifest
 
 
 @dataclass
@@ -45,7 +45,7 @@ def iter_import_items(filename: str, raw: bytes) -> Iterable[ImportItem]:
             for member in archive.infolist():
                 if member.is_dir() or not member.filename.lower().endswith('.json'):
                     continue
-                # Do not extract paths from third-party archives. JSON is read in memory only.
+                # Third-party archives are never extracted. We only inspect JSON in memory.
                 if member.file_size > 50 * 1024 * 1024:
                     continue
                 value = _safe_json_loads(archive.read(member))
@@ -55,9 +55,9 @@ def iter_import_items(filename: str, raw: bytes) -> Iterable[ImportItem]:
 
 def _existing_hashes() -> dict[str, str]:
     result: dict[str, str] = {}
-    if not WORKFLOW_ROOT.exists():
+    if not LOCAL_WORKFLOW_ROOT.exists():
         return result
-    for path in WORKFLOW_ROOT.glob('*/analysis.json'):
+    for path in LOCAL_WORKFLOW_ROOT.glob('*/analysis.json'):
         try:
             payload = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
@@ -183,7 +183,7 @@ def import_payload(filename: str, raw: bytes, db: Database, source_name: str = '
 
         base_id = str(analysis['slug'])
         workflow_id = f"{base_id}-{content_hash[:8]}"
-        package_dir = WORKFLOW_ROOT / workflow_id
+        package_dir = LOCAL_WORKFLOW_ROOT / workflow_id
         package_dir.mkdir(parents=True, exist_ok=True)
         original_path = package_dir / 'original.json'
         manifest_path = package_dir / 'manifest.json'
