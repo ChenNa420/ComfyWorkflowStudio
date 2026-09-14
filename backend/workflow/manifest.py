@@ -7,7 +7,9 @@ from pydantic import ValidationError
 
 from backend.models import WorkflowManifest
 
-WORKFLOW_ROOT = Path(__file__).resolve().parents[2] / 'workflows'
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW_ROOT = ROOT / 'workflows'
+LOCAL_WORKFLOW_ROOT = ROOT / 'storage' / 'workflow-packages'
 
 
 def load_manifest(path: str | Path) -> WorkflowManifest:
@@ -26,13 +28,14 @@ def save_manifest(manifest: WorkflowManifest, path: str | Path) -> None:
 
 
 def discover_manifests(root: Path | None = None) -> list[tuple[Path, WorkflowManifest]]:
-    base = root or WORKFLOW_ROOT
-    if not base.exists():
-        return []
+    bases = [root] if root is not None else [WORKFLOW_ROOT, LOCAL_WORKFLOW_ROOT]
     result: list[tuple[Path, WorkflowManifest]] = []
-    for path in sorted(base.glob('*/manifest.json')):
-        try:
-            result.append((path, load_manifest(path)))
-        except (OSError, json.JSONDecodeError, ValidationError):
+    for base in bases:
+        if base is None or not base.exists():
             continue
+        for path in sorted(base.glob('*/manifest.json')):
+            try:
+                result.append((path, load_manifest(path)))
+            except (OSError, json.JSONDecodeError, ValidationError):
+                continue
     return result
