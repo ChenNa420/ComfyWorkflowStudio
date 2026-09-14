@@ -15,6 +15,8 @@ NON_EXECUTION_NODE_TYPES = {
     'MarkdownNote',
 }
 
+PRIMITIVE_WIDGET_TYPES = {'INT', 'FLOAT', 'BOOLEAN', 'STRING'}
+
 
 def _flatten_state(value: Any, result: dict[str, Any] | None = None) -> dict[str, Any]:
     output = result or {}
@@ -50,6 +52,11 @@ def _spec_options(spec: Any) -> dict[str, Any]:
     return {}
 
 
+def _is_widget_spec(spec: Any) -> bool:
+    kind = _spec_kind(spec)
+    return isinstance(kind, list) or kind in PRIMITIVE_WIDGET_TYPES
+
+
 def _compatible(value: Any, spec: Any) -> bool:
     kind = _spec_kind(spec)
     if isinstance(kind, list):
@@ -62,9 +69,9 @@ def _compatible(value: Any, spec: Any) -> bool:
         return isinstance(value, bool)
     if kind == 'STRING':
         return isinstance(value, str)
-    # Connection-only types normally arrive as links. For custom nodes with a
-    # primitive widget type that is not described by ComfyUI, keep the value.
-    return isinstance(value, (str, int, float, bool)) or value is None
+    # IMAGE / MODEL / LATENT / CONDITIONING and other unknown kinds are
+    # connection types. Never guess them from arbitrary widget values.
+    return False
 
 
 def _default_for_spec(spec: Any) -> tuple[bool, Any]:
@@ -166,6 +173,16 @@ def ui_workflow_to_prompt(workflow: dict[str, Any], object_info: dict[str, Any])
                 api_inputs[field] = state_candidate
                 continue
 
+            # Connection-only inputs must never consume widget values. This is
+            # especially important for optional inputs such as last_frame: if it
+            # is unlinked we leave it absent and preserve width/height/length
+            # widgets for the primitive fields that follow.
+            if not _is_widget_spec(spec):
+                required = field in ((info.get('input') or {}).get('required') or {})
+                if required:
+                    raise WorkflowConversionError(f'Cannot map required connection {field} on node {node_id} ({class_type})')
+                continue
+
             matched = False
             while widget_index < len(values):
                 candidate = values[widget_index]
@@ -182,8 +199,6 @@ def ui_workflow_to_prompt(workflow: dict[str, Any], object_info: dict[str, Any])
                 api_inputs[field] = default_value
                 continue
 
-            # Optional inputs may be absent; required connection inputs that are
-            # not linked must be reviewed rather than guessed.
             required = field in ((info.get('input') or {}).get('required') or {})
             if required:
                 raise WorkflowConversionError(f'Cannot map required input {field} on node {node_id} ({class_type})')
