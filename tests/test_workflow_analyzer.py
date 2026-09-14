@@ -36,6 +36,14 @@ class WorkflowAnalyzerTests(unittest.TestCase):
                     'properties': {'cnr_id': 'ComfyUI-Pixaroma'},
                     'widgets_values': [24, 'Video', 'save', False, ''],
                 },
+                {
+                    'id': 4,
+                    'type': 'KSampler',
+                    'inputs': [],
+                    'outputs': [{'name': 'LATENT', 'links': []}],
+                    'properties': {'cnr_id': 'comfy-core'},
+                    'widgets_values': [1234, 'randomize', 20, 1.0, 'euler'],
+                },
             ],
             'links': [],
         }
@@ -46,15 +54,20 @@ class WorkflowAnalyzerTests(unittest.TestCase):
         self.assertEqual(first_frame['purpose'], 'video-start-frame')
         self.assertTrue(any(item['type'] == 'video' for item in result['outputs']))
         self.assertIn('ComfyUI-Pixaroma', [item['name'] for item in result['dependencies']['customNodes']])
+        seed = next(item for item in result['parameters'] if item['key'] == 'seed')
+        self.assertEqual(seed['default'], 1234)
+        self.assertEqual(seed['mapping'], {'nodeId': '4', 'field': 'seed'})
 
     def test_detects_api_workflow(self):
         workflow = {
             '1': {'class_type': 'UNETLoader', 'inputs': {'unet_name': 'model.safetensors'}},
             '2': {'class_type': 'SaveImage', 'inputs': {'images': ['1', 0]}},
+            '3': {'class_type': 'KSampler', 'inputs': {'seed': 4321}},
         }
         self.assertEqual(detect_workflow_format(workflow), 'api-workflow')
         result = analyze_workflow(workflow, 'Example.json')
         self.assertIn('model.safetensors', [item['name'] for item in result['dependencies']['models']])
+        self.assertEqual(result['parameters'][0]['mapping'], {'nodeId': '3', 'field': 'seed'})
 
 
 class WorkflowConverterTests(unittest.TestCase):

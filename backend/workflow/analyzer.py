@@ -177,6 +177,16 @@ def analyze_ui_workflow(data: dict[str, Any], filename: str) -> dict[str, Any]:
                 'mapping': {'nodeId': node_id, 'field': 'duration', 'strategy': 'duration-to-frames'},
             })
 
+        if 'sampler' in node_type.lower() and widgets and isinstance(widgets[0], int) and not isinstance(widgets[0], bool):
+            parameters.append({
+                'key': 'seed',
+                'label': 'Seed',
+                'type': 'seed',
+                'default': widgets[0],
+                'description': '控制随机采样；使用相同 Seed 有助于复现结果。',
+                'mapping': {'nodeId': node_id, 'field': 'seed'},
+            })
+
         output_key = f'output_{node_id}'
         if any(hint in lower for hint in OUTPUT_VIDEO_HINTS):
             outputs.append({'key': output_key, 'type': 'video', 'format': 'mp4', 'mapping': {'nodeId': node_id}})
@@ -222,6 +232,7 @@ def analyze_api_workflow(data: dict[str, Any], filename: str) -> dict[str, Any]:
     models: set[str] = set()
     custom_nodes: dict[str, dict[str, Any]] = {}
     outputs: list[dict[str, Any]] = []
+    parameters: list[dict[str, Any]] = []
 
     for node_id, node in data.items():
         if not isinstance(node, dict):
@@ -230,6 +241,16 @@ def analyze_api_workflow(data: dict[str, Any], filename: str) -> dict[str, Any]:
         inputs = node.get('inputs') or {}
         models.update(_extract_models_from_values(inputs))
         lower = node_type.lower()
+        seed = inputs.get('seed')
+        if 'sampler' in lower and isinstance(seed, int) and not isinstance(seed, bool):
+            parameters.append({
+                'key': 'seed',
+                'label': 'Seed',
+                'type': 'seed',
+                'default': seed,
+                'description': '控制随机采样；使用相同 Seed 有助于复现结果。',
+                'mapping': {'nodeId': str(node_id), 'field': 'seed'},
+            })
         if lower.startswith('pixaroma'):
             custom_nodes['ComfyUI-Pixaroma'] = {'name': 'ComfyUI-Pixaroma', 'required': True}
         if any(hint in lower for hint in OUTPUT_VIDEO_HINTS):
@@ -247,7 +268,7 @@ def analyze_api_workflow(data: dict[str, Any], filename: str) -> dict[str, Any]:
         'nodeCount': len(data),
         'linkCount': 0,
         'inputs': [],
-        'parameters': [],
+        'parameters': _dedupe_parameters(parameters),
         'outputs': outputs or [{'key': 'output', 'type': 'video' if 'video' in category else 'image', 'mapping': {}}],
         'dependencies': {
             'models': [{'name': model, 'required': True} for model in sorted(models)],
