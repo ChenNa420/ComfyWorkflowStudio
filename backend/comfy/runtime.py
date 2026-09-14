@@ -16,6 +16,26 @@ from backend.models import GenerationTaskCreate, WorkflowManifest
 OUTPUT_ROOT = ROOT / 'storage' / 'outputs'
 _RUNTIME_LOCK = threading.Lock()
 
+_DURATION_SECOND_FIELDS = {
+    'duration',
+    'seconds',
+    'duration_sec',
+    'duration_secs',
+    'duration_seconds',
+}
+_DURATION_FRAME_FIELDS = {
+    'frames',
+    'frame_count',
+    'framecount',
+    'total_frames',
+    'totalframes',
+    'num_frames',
+    'numframes',
+    'video_frames',
+    'videoframes',
+    'length',
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -118,7 +138,15 @@ def run_task(db: Database, task_id: str) -> None:
 
     inputs = json.loads(task['inputs_json'] or '{}')
     parameters = json.loads(task['parameters_json'] or '{}')
-    _apply_manifest_values(prompt, manifest, inputs, parameters, source, client)
+    duration_plan = _apply_manifest_values(prompt, manifest, inputs, parameters, source, client)
+    if duration_plan:
+        _event(
+            db,
+            task_id,
+            'DURATION_APPLIED',
+            f"动态时长 {duration_plan['seconds']}s → {duration_plan['frames']} frames @ {duration_plan['fps']}fps",
+            duration_plan,
+        )
 
     runtime_dir = ROOT / 'storage' / 'runtime' / task_id
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -154,7 +182,8 @@ def _resolve_prompt_field(node_inputs: dict[str, Any], requested: str | None) ->
     aliases = {
         'text': ('text', 'text_in', 'prompt'),
         'image': ('image', 'image_path', 'filename'),
-        'duration': ('duration', 'seconds', 'frames', 'length'),
+        'duration': ('duration', 'seconds', 'frames', 'length', 'frame_count', 'total_frames'),
+        'fps': ('fps', 'frame_rate', 'framerate'),
     }
     for candidate in aliases.get(requested or '', (requested,) if requested else ()):
         if candidate and candidate in node_inputs:
@@ -172,17 +201,88 @@ def _upload_if_path(value: Any, client: ComfyClient) -> Any:
     return result.get('name') or path.name
 
 
-def _duration_to_frames(seconds: float, source: dict[str, Any], node_id: str | None) -> int:
-    if isinstance(source.get('nodes'), list) and node_id:
-        for node in source['nodes']:
-            if str(node.get('id')) != str(node_id):
+def _iter_duration_states(value: Any):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {'durationState', 'duration_state'} and isinstance(item, dict):
+                yield item
+            yield from _iter_duration_states(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_duration_states(item)
+
+
+def _duration_plan(seconds: float, source: dict[str, Any], fps_override: float | None = None) -> dict[str, Any]:
+    seconds = float(seconds)
+    if seconds <= 0:
+        raise WorkflowConversionError('duration must be greater than 0')
+
+    fps = float(fps_override) if fps_override and float(fps_override) > 0 else 24.0
+    padding = 4.0
+    state_source = None
+    for state in _iter_duration_states(source):
+        state_fps = state.get('fps')
+        state_step = state.get('step')
+        state_plus = state.get('plus')
+        if not fps_override:
+            if isinstance(state_fps, (int, float)) and state_fps > 0:
+                fps = float(state_fps)
+            elif isinstance(state_step, (int, float)) and state_step > 0:
+                fps = float(state_step)
+        if isinstance(state_plus, (int, float)):
+            padding = float(state_plus)
+        state_source = 'durationState'
+        break
+
+    frames = max(1, round(seconds * fps + padding))
+    return {
+        'seconds': seconds,
+        'fps': int(fps) if fps.is_integer() else fps,
+        'padding': int(padding) if padding.is_integer() else padding,
+        'frames': frames,
+        'source': state_source or 'fallback-24fps-plus4',
+        'updated': [],
+    }
+
+
+def _duration_to_frames(seconds: float, source: dict[str, Any], node_id: str | None = None, fps: float | None = None) -> int:
+    # node_id is kept for backward compatibility with older manifests. The
+    # source-level duration state is more reliable because some workflows keep
+    # the duration metadata on a UI helper node while frame fields live on
+    # downstream generation nodes.
+    del node_id
+    return int(_duration_plan(seconds, source, fps)['frames'])
+
+
+def _apply_dynamic_duration(
+    prompt: dict[str, Any],
+    source: dict[str, Any],
+    seconds: float,
+    fps: float | None = None,
+) -> dict[str, Any]:
+    plan = _duration_plan(seconds, source, fps)
+    frames = int(plan['frames'])
+    updated: list[str] = []
+
+    for node_id, node in prompt.items():
+        if not isinstance(node, dict):
+            continue
+        node_inputs = node.get('inputs')
+        if not isinstance(node_inputs, dict):
+            continue
+        for field, current in list(node_inputs.items()):
+            if isinstance(current, (list, dict)) or isinstance(current, bool):
                 continue
-            state = ((node.get('properties') or {}).get('durationState') or {})
-            step = state.get('step')
-            plus = state.get('plus')
-            if isinstance(step, (int, float)) and isinstance(plus, (int, float)):
-                return max(1, round(seconds * step + plus))
-    return max(1, round(seconds * 24 + 4))
+            normalized = str(field).strip().lower().replace('-', '_')
+            if normalized in _DURATION_SECOND_FIELDS and isinstance(current, (int, float)):
+                node_inputs[field] = float(seconds)
+                updated.append(f'{node_id}.{field}=seconds')
+            elif normalized in _DURATION_FRAME_FIELDS and isinstance(current, (int, float)):
+                node_inputs[field] = frames
+                updated.append(f'{node_id}.{field}=frames')
+
+    plan['updated'] = updated
+    return plan
 
 
 def _apply_manifest_values(
@@ -192,7 +292,7 @@ def _apply_manifest_values(
     parameters: dict[str, Any],
     source: dict[str, Any],
     client: ComfyClient,
-) -> None:
+) -> dict[str, Any] | None:
     for item in manifest.inputs:
         if item.key not in values or not item.mapping.nodeId:
             continue
@@ -208,23 +308,47 @@ def _apply_manifest_values(
             value = _upload_if_path(value, client)
         node_inputs[field] = value
 
+    fps_value: float | None = None
+    for key, value in parameters.items():
+        if str(key).lower() in {'fps', 'frame_rate', 'framerate'}:
+            try:
+                fps_value = float(value)
+            except (TypeError, ValueError):
+                fps_value = None
+            break
+
+    duration_seconds: float | None = None
     for item in manifest.parameters:
-        if item.key not in parameters or not item.mapping.nodeId:
+        if item.key not in parameters:
+            continue
+        value = parameters[item.key]
+        is_duration = item.mapping.strategy == 'duration-to-frames' or item.key.lower() in {
+            'duration', 'seconds', 'duration_seconds', 'video_duration'
+        }
+        if is_duration:
+            try:
+                duration_seconds = float(value)
+            except (TypeError, ValueError) as exc:
+                raise WorkflowConversionError(f'invalid duration: {value!r}') from exc
+
+        if not item.mapping.nodeId:
             continue
         node = prompt.get(str(item.mapping.nodeId))
         if not isinstance(node, dict):
             continue
         node_inputs = node.setdefault('inputs', {})
-        value = parameters[item.key]
         field = _resolve_prompt_field(node_inputs, item.mapping.field)
-        if item.mapping.strategy == 'duration-to-frames':
-            seconds = float(value)
-            if field in {'frames', 'length'}:
-                value = _duration_to_frames(seconds, source, item.mapping.nodeId)
-            elif field in {'duration', 'seconds'}:
-                value = seconds
+        if item.mapping.strategy == 'duration-to-frames' and duration_seconds is not None:
+            if field and str(field).lower().replace('-', '_') in _DURATION_FRAME_FIELDS:
+                value = _duration_to_frames(duration_seconds, source, item.mapping.nodeId, fps_value)
+            elif field and str(field).lower().replace('-', '_') in _DURATION_SECOND_FIELDS:
+                value = duration_seconds
         if field:
             node_inputs[field] = value
+
+    if manifest.runtime.durationPolicy == 'dynamic' and duration_seconds is not None:
+        return _apply_dynamic_duration(prompt, source, duration_seconds, fps_value)
+    return None
 
 
 def _collect_outputs(db: Database, task_id: str, workflow_id: str, history: dict[str, Any], client: ComfyClient) -> list[dict[str, Any]]:
