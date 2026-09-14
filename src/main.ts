@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
-import App from './AppPhase1D.vue'
+import StudioRoot from './StudioRoot.vue'
 import './style.css'
 import './phase1d.css'
+import './studio-root.css'
 
-createApp(App).mount('#app')
+createApp(StudioRoot).mount('#app')
