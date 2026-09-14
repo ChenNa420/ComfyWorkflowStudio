@@ -48,7 +48,7 @@ const nav = [
 
       <nav>
         <button v-for="([Icon, label], index) in nav" :key="label" :class="['nav-item', { active: index === 0 }]">
-          <Icon :size="18" />
+          <component :is="Icon" :size="18" />
           <span>{{ label }}</span>
         </button>
       </nav>
