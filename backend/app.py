@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.comfy.runtime import create_task as create_generation_task
-from backend.db import Database, row_to_dict
+from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.catalog import import_payload
 from backend.workflow.manifest import discover_manifests, load_manifest, save_manifest
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
         with db.connect() as conn:
             running = conn.execute("SELECT COUNT(*) AS c FROM generation_tasks WHERE status IN ('WAITING','PREPARING','SUBMITTING','QUEUED','RUNNING')").fetchone()['c']
             outputs = conn.execute('SELECT COUNT(*) AS c FROM outputs').fetchone()['c']
+            materials = conn.execute('SELECT COUNT(*) AS c FROM materials').fetchone()['c']
         return {
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
@@ -45,6 +47,7 @@ def create_app() -> FastAPI:
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
+            'materials': materials,
             'comfyUi': comfy_status,
             'comfyUiUrl': comfy_url_from_env(),
         }
@@ -88,7 +91,7 @@ def create_app() -> FastAPI:
 
     @app.get('/api/workflows/{workflow_id}/manifest')
     def workflow_manifest(workflow_id: str):
-        for path, manifest in discover_manifests():
+        for _, manifest in discover_manifests():
             if manifest.workflowId == workflow_id:
                 return manifest.model_dump(mode='json')
         raise HTTPException(status_code=404, detail='workflow_not_found')
@@ -152,6 +155,33 @@ def create_app() -> FastAPI:
             },
         }
 
+    @app.post('/api/materials')
+    async def upload_material(file: UploadFile = File(...), material_type: str | None = None):
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail='empty_file')
+        filename = Path(file.filename or 'material.bin').name
+        suffix = Path(filename).suffix
+        material_id = f'mat-{uuid.uuid4().hex[:12]}'
+        storage_dir = ROOT / 'storage' / 'materials'
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        target = storage_dir / f'{material_id}{suffix}'
+        target.write_bytes(raw)
+        detected_type = material_type or _material_type_from_content(file.content_type or '', suffix)
+        with db.connect() as conn:
+            conn.execute(
+                'INSERT INTO materials(id,type,name,file_path,thumbnail_path,width,height,duration,tags_json,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,datetime(\'now\'))',
+                (material_id, detected_type, filename, str(target), None, None, None, None, '[]', 'upload'),
+            )
+        return {'id': material_id, 'type': detected_type, 'name': filename, 'filePath': str(target)}
+
+    @app.get('/api/materials')
+    def list_materials(limit: int = 200):
+        limit = max(1, min(limit, 1000))
+        with db.connect() as conn:
+            rows = conn.execute('SELECT * FROM materials ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
     @app.post('/api/tasks')
     def create_task(payload: GenerationTaskCreate):
         try:
@@ -206,6 +236,23 @@ def create_app() -> FastAPI:
         return FileResponse(path)
 
     return app
+
+
+def _material_type_from_content(content_type: str, suffix: str) -> str:
+    if content_type.startswith('image/'):
+        return 'image'
+    if content_type.startswith('video/'):
+        return 'video'
+    if content_type.startswith('audio/'):
+        return 'audio'
+    lowered = suffix.lower()
+    if lowered in {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}:
+        return 'image'
+    if lowered in {'.mp4', '.mov', '.webm', '.mkv'}:
+        return 'video'
+    if lowered in {'.wav', '.mp3', '.flac', '.m4a'}:
+        return 'audio'
+    return 'file'
 
 
 app = create_app()
