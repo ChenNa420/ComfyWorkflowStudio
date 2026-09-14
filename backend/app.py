@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
-from backend.db import Database
-from backend.workflow.manifest import discover_manifests
+from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
+from backend.comfy.runtime import create_task as create_generation_task
+from backend.db import Database, row_to_dict
+from backend.models import GenerationTaskCreate, WorkflowManifest
+from backend.workflow.catalog import import_payload
+from backend.workflow.manifest import discover_manifests, load_manifest, save_manifest
 
 
 def create_app() -> FastAPI:
@@ -17,23 +24,53 @@ def create_app() -> FastAPI:
         app.state.db = db
         yield
 
-    app = FastAPI(title='ComfyWorkflowStudio API', version='0.1.0', lifespan=lifespan)
+    app = FastAPI(title='ComfyWorkflowStudio API', version='0.4.0', lifespan=lifespan)
 
     @app.get('/api/health')
     def health():
         manifests = discover_manifests()
+        comfy_status = 'offline'
+        try:
+            ComfyClient(comfy_url_from_env(), timeout=3).system_stats()
+            comfy_status = 'connected'
+        except ComfyClientError:
+            pass
+        with db.connect() as conn:
+            running = conn.execute("SELECT COUNT(*) AS c FROM generation_tasks WHERE status IN ('WAITING','PREPARING','SUBMITTING','QUEUED','RUNNING')").fetchone()['c']
+            outputs = conn.execute('SELECT COUNT(*) AS c FROM outputs').fetchone()['c']
         return {
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
-            'phase': '1A',
+            'phase': '1D',
             'workflowPackages': len(manifests),
-            'comfyUi': 'not-configured',
+            'runningTasks': running,
+            'outputs': outputs,
+            'comfyUi': comfy_status,
+            'comfyUiUrl': comfy_url_from_env(),
         }
+
+    @app.get('/api/comfy/status')
+    def comfy_status():
+        client = ComfyClient(comfy_url_from_env(), timeout=5)
+        try:
+            stats = client.system_stats()
+            queue = client.queue()
+        except ComfyClientError as exc:
+            return {'connected': False, 'url': comfy_url_from_env(), 'error': str(exc)}
+        return {'connected': True, 'url': comfy_url_from_env(), 'stats': stats, 'queue': queue}
 
     @app.get('/api/workflows')
     def list_workflows():
-        return [
-            {
+        result = []
+        for path, manifest in discover_manifests():
+            analysis_path = path.parent / 'analysis.json'
+            analysis = {}
+            if analysis_path.is_file():
+                try:
+                    analysis = json.loads(analysis_path.read_text(encoding='utf-8'))
+                except (OSError, json.JSONDecodeError):
+                    analysis = {}
+            result.append({
                 'id': manifest.workflowId,
                 'name': manifest.name,
                 'category': manifest.category,
@@ -43,16 +80,130 @@ def create_app() -> FastAPI:
                 'inputs': len(manifest.inputs),
                 'outputs': [item.type for item in manifest.outputs],
                 'source': manifest.source.model_dump(),
-            }
-            for _, manifest in discover_manifests()
-        ]
+                'format': analysis.get('format'),
+                'nodeCount': analysis.get('nodeCount'),
+                'contentHash': analysis.get('hash'),
+            })
+        return result
 
     @app.get('/api/workflows/{workflow_id}/manifest')
     def workflow_manifest(workflow_id: str):
-        for _, manifest in discover_manifests():
+        for path, manifest in discover_manifests():
             if manifest.workflowId == workflow_id:
                 return manifest.model_dump(mode='json')
-        return {'error': 'workflow_not_found', 'workflowId': workflow_id}
+        raise HTTPException(status_code=404, detail='workflow_not_found')
+
+    @app.put('/api/workflows/{workflow_id}/manifest')
+    def update_workflow_manifest(workflow_id: str, payload: WorkflowManifest):
+        if payload.workflowId != workflow_id:
+            raise HTTPException(status_code=400, detail='workflow_id_mismatch')
+        for path, _ in discover_manifests():
+            if path.parent.name == workflow_id or load_manifest(path).workflowId == workflow_id:
+                save_manifest(payload, path)
+                with db.connect() as conn:
+                    conn.execute(
+                        'UPDATE workflows SET name=?,category=?,description=?,difficulty=?,manifest_json=?,updated_at=datetime(\'now\') WHERE id=?',
+                        (payload.name, payload.category, payload.description, payload.difficulty, json.dumps(payload.model_dump(mode='json'), ensure_ascii=False), workflow_id),
+                    )
+                return {'ok': True, 'workflowId': workflow_id}
+        raise HTTPException(status_code=404, detail='workflow_not_found')
+
+    @app.get('/api/workflows/{workflow_id}/analysis')
+    def workflow_analysis(workflow_id: str):
+        for path, manifest in discover_manifests():
+            if manifest.workflowId != workflow_id:
+                continue
+            analysis_path = path.parent / 'analysis.json'
+            if not analysis_path.is_file():
+                return {'workflowId': workflow_id, 'analysis': None}
+            return json.loads(analysis_path.read_text(encoding='utf-8'))
+        raise HTTPException(status_code=404, detail='workflow_not_found')
+
+    @app.get('/api/workflows/{workflow_id}/compatibility')
+    def workflow_compatibility(workflow_id: str):
+        analysis = workflow_analysis(workflow_id)
+        node_types = analysis.get('nodeTypes') or [] if isinstance(analysis, dict) else []
+        try:
+            object_info = ComfyClient(comfy_url_from_env(), timeout=10).object_info()
+        except ComfyClientError as exc:
+            return {'workflowId': workflow_id, 'status': 'COMFY_OFFLINE', 'missingNodes': [], 'error': str(exc)}
+        missing = [node_type for node_type in node_types if node_type not in object_info and node_type not in {'PixaromaNote', 'PixaromaLabel'}]
+        return {
+            'workflowId': workflow_id,
+            'status': 'READY' if not missing else 'MISSING_NODES',
+            'missingNodes': missing,
+            'checkedNodeTypes': len(node_types),
+        }
+
+    @app.post('/api/workflows/import')
+    async def import_workflows(files: list[UploadFile] = File(...)):
+        results = []
+        for upload in files:
+            raw = await upload.read()
+            results.append(import_payload(upload.filename or 'upload.json', raw, db, source_name='Local Import'))
+        return {
+            'ok': all(item.get('ok') for item in results),
+            'files': results,
+            'summary': {
+                'imported': sum(len(item.get('imported') or []) for item in results),
+                'duplicates': sum(len(item.get('duplicates') or []) for item in results),
+                'resources': sum(len(item.get('resources') or []) for item in results),
+                'invalid': sum(int(item.get('invalid') or 0) for item in results),
+            },
+        }
+
+    @app.post('/api/tasks')
+    def create_task(payload: GenerationTaskCreate):
+        try:
+            task_id = create_generation_task(db, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {'taskId': task_id, 'status': 'WAITING'}
+
+    @app.get('/api/tasks')
+    def list_tasks(limit: int = 100):
+        limit = max(1, min(limit, 500))
+        with db.connect() as conn:
+            rows = conn.execute('SELECT * FROM generation_tasks ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+    @app.get('/api/tasks/{task_id}')
+    def task_detail(task_id: str):
+        with db.connect() as conn:
+            row = conn.execute('SELECT * FROM generation_tasks WHERE id=?', (task_id,)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail='task_not_found')
+            outputs = conn.execute('SELECT * FROM outputs WHERE task_id=? ORDER BY created_at', (task_id,)).fetchall()
+        data = dict(row)
+        data['outputs'] = [dict(item) for item in outputs]
+        return data
+
+    @app.get('/api/tasks/{task_id}/events')
+    def task_events(task_id: str):
+        with db.connect() as conn:
+            exists = conn.execute('SELECT 1 FROM generation_tasks WHERE id=?', (task_id,)).fetchone()
+            if exists is None:
+                raise HTTPException(status_code=404, detail='task_not_found')
+            rows = conn.execute('SELECT * FROM generation_task_events WHERE task_id=? ORDER BY id', (task_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    @app.get('/api/outputs')
+    def list_outputs(limit: int = 100):
+        limit = max(1, min(limit, 500))
+        with db.connect() as conn:
+            rows = conn.execute('SELECT * FROM outputs ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+    @app.get('/api/outputs/{output_id}/file')
+    def output_file(output_id: str):
+        with db.connect() as conn:
+            row = conn.execute('SELECT * FROM outputs WHERE id=?', (output_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail='output_not_found')
+        path = Path(row['file_path'])
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail='output_file_missing')
+        return FileResponse(path)
 
     return app
 
