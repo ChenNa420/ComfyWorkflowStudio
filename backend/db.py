@@ -9,13 +9,23 @@ DEFAULT_DB = DATABASE_DIR / "studio.sqlite3"
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit or roll back and always release the SQLite file handle."""
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class Database:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or DEFAULT_DB
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, factory=ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")

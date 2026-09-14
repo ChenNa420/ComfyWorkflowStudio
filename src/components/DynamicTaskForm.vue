@@ -34,12 +34,13 @@ type Manifest = {
   parameters: ManifestParameter[]
   runtime?: { executionMode?: string; retryUnknown?: boolean; preserveOriginalWorkflow?: boolean }
 }
+type FormValue = string | number | boolean
 
 const workflows = ref<WorkflowSummary[]>([])
 const selectedId = ref('')
 const manifest = ref<Manifest | null>(null)
-const values = ref<Record<string, unknown>>({})
-const parameters = ref<Record<string, unknown>>({})
+const values = ref<Record<string, FormValue>>({})
+const parameters = ref<Record<string, FormValue>>({})
 const uploadedNames = ref<Record<string, string>>({})
 const loading = ref(false)
 const submitting = ref(false)
@@ -80,7 +81,10 @@ async function loadManifest(id: string) {
       if (item.type === 'boolean') values.value[item.key] = false
       else values.value[item.key] = ''
     }
-    for (const item of manifest.value?.parameters || []) parameters.value[item.key] = item.default ?? ''
+    for (const item of manifest.value?.parameters || []) {
+      const value = item.default
+      parameters.value[item.key] = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? value : ''
+    }
     sessionStorage.setItem('cws-selected-workflow', id)
   } catch (value) {
     error.value = value instanceof Error ? value.message : '读取 Manifest 失败'
@@ -109,6 +113,10 @@ async function uploadMaterial(event: Event, key: string) {
 
 function isFileInput(type: string) {
   return ['image', 'video', 'audio'].includes(type)
+}
+
+function setTextValue(event: Event, key: string) {
+  values.value[key] = (event.target as HTMLTextAreaElement).value
 }
 
 async function submitTask() {
@@ -188,7 +196,7 @@ onMounted(async () => {
             <span>{{ uploadedNames[item.key] || item.help || `选择${item.label}` }}</span>
             <input class="file-overlay" type="file" :accept="item.accept?.join(',')" @change="uploadMaterial($event, item.key)" />
           </div>
-          <textarea v-else-if="item.type === 'textarea'" v-model="values[item.key]" :placeholder="item.help || item.description"></textarea>
+          <textarea v-else-if="item.type === 'textarea'" :value="String(values[item.key] ?? '')" :placeholder="item.help || item.description" @input="setTextValue($event, item.key)"></textarea>
           <select v-else-if="item.type === 'boolean'" v-model="values[item.key]"><option :value="false">关闭</option><option :value="true">开启</option></select>
           <input v-else v-model="values[item.key]" :type="['number','seed','slider'].includes(item.type) ? 'number' : 'text'" :placeholder="item.help || item.description" />
           <small v-if="item.purpose">用途：{{ item.purpose }}</small>

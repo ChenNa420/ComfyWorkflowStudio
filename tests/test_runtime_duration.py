@@ -56,6 +56,29 @@ class RuntimeDurationTests(unittest.TestCase):
         self.assertEqual(prompt['40']['inputs']['height'], 864)
         self.assertEqual(prompt['40']['inputs']['model'], ['1', 0])
 
+    def test_minimax_recipe_uses_phase1d_padding_and_replaces_linked_length(self):
+        source = {
+            'nodes': [{
+                'properties': {
+                    'durationState': {
+                        'fps': 24,
+                        'plus': 5,
+                        'recipeName': 'MiniMax H3',
+                    },
+                },
+            }],
+        }
+        prompt = {
+            '222': {'class_type': 'MiniMaxH3ImageToVideo', 'inputs': {'length': ['238', 0]}},
+            '228': {'class_type': 'PixaromaSaveMp4', 'inputs': {'video_frames': ['226', 0]}},
+        }
+
+        plan = _apply_dynamic_duration(prompt, source, 8)
+
+        self.assertEqual(plan['frames'], 196)
+        self.assertEqual(prompt['222']['inputs']['length'], 196)
+        self.assertEqual(prompt['228']['inputs']['video_frames'], ['226', 0])
+
     def test_fps_override_controls_frame_count(self):
         source = {
             'nodes': [

@@ -31,8 +31,6 @@ _DURATION_FRAME_FIELDS = {
     'totalframes',
     'num_frames',
     'numframes',
-    'video_frames',
-    'videoframes',
     'length',
 }
 
@@ -229,7 +227,10 @@ def _duration_plan(seconds: float, source: dict[str, Any], fps_override: float |
                 fps = float(state_fps)
             elif isinstance(state_step, (int, float)) and state_step > 0:
                 fps = float(state_step)
-        if isinstance(state_plus, (int, float)):
+        recipe_name = str(state.get('recipeName') or state.get('recipe_name') or '').strip().lower()
+        if recipe_name == 'minimax h3':
+            padding = 4.0
+        elif isinstance(state_plus, (int, float)):
             padding = float(state_plus)
         state_source = 'durationState'
         break
@@ -271,15 +272,13 @@ def _apply_dynamic_duration(
         if not isinstance(node_inputs, dict):
             continue
         for field, current in list(node_inputs.items()):
-            if isinstance(current, (list, dict)) or isinstance(current, bool):
-                continue
             normalized = str(field).strip().lower().replace('-', '_')
-            if normalized in _DURATION_SECOND_FIELDS and isinstance(current, (int, float)):
-                node_inputs[field] = float(seconds)
-                updated.append(f'{node_id}.{field}=seconds')
-            elif normalized in _DURATION_FRAME_FIELDS and isinstance(current, (int, float)):
+            if normalized in _DURATION_FRAME_FIELDS and not isinstance(current, bool):
                 node_inputs[field] = frames
                 updated.append(f'{node_id}.{field}=frames')
+            elif normalized in _DURATION_SECOND_FIELDS and isinstance(current, (int, float)) and not isinstance(current, bool):
+                node_inputs[field] = float(seconds)
+                updated.append(f'{node_id}.{field}=seconds')
 
     plan['updated'] = updated
     return plan
@@ -351,6 +350,16 @@ def _apply_manifest_values(
     return None
 
 
+def _detect_output_type(default_type: str, filename: str, media_format: str = '') -> str:
+    suffix = Path(filename).suffix.lower()
+    normalized_format = media_format.lower()
+    if normalized_format.startswith('video/') or suffix in {'.mp4', '.webm', '.mov', '.mkv'}:
+        return 'video'
+    if normalized_format.startswith('audio/') or suffix in {'.wav', '.mp3', '.flac', '.m4a', '.ogg'}:
+        return 'audio'
+    return default_type
+
+
 def _collect_outputs(db: Database, task_id: str, workflow_id: str, history: dict[str, Any], client: ComfyClient) -> list[dict[str, Any]]:
     output_dir = OUTPUT_ROOT / task_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -367,6 +376,7 @@ def _collect_outputs(db: Database, task_id: str, workflow_id: str, history: dict
                 if not isinstance(item, dict) or not item.get('filename'):
                     continue
                 filename = Path(str(item['filename'])).name
+                detected_type = _detect_output_type(output_type, filename, str(item.get('format') or ''))
                 raw = client.download_view(filename, str(item.get('subfolder') or ''), str(item.get('type') or 'output'))
                 target = output_dir / filename
                 target.write_bytes(raw)
@@ -375,7 +385,7 @@ def _collect_outputs(db: Database, task_id: str, workflow_id: str, history: dict
                 with db.connect() as conn:
                     conn.execute(
                         'INSERT INTO outputs(id,task_id,workflow_id,type,file_path,thumbnail_path,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
-                        (output_id, task_id, workflow_id, output_type, str(target), None, json.dumps(metadata, ensure_ascii=False), _now()),
+                        (output_id, task_id, workflow_id, detected_type, str(target), None, json.dumps(metadata, ensure_ascii=False), _now()),
                     )
-                saved.append({'id': output_id, 'type': output_type, 'file': str(target)})
+                saved.append({'id': output_id, 'type': detected_type, 'file': str(target)})
     return saved
