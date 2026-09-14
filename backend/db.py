@@ -25,6 +25,11 @@ class Database:
         schema = SCHEMA_FILE.read_text(encoding="utf-8")
         with self.connect() as conn:
             conn.executescript(schema)
+        # Workflow packages are the durable local source of truth. If the
+        # SQLite database is recreated, restore catalog rows from manifests.
+        from backend.workflow.catalog import sync_catalog_to_db
+
+        sync_catalog_to_db(self)
 
 
 def row_to_dict(row: sqlite3.Row | None):
