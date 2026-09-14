@@ -90,6 +90,45 @@ class WorkflowConverterTests(unittest.TestCase):
         self.assertEqual(prompt['2']['inputs']['steps'], 20)
         self.assertEqual(prompt['2']['inputs']['sampler_name'], 'euler')
 
+    def test_optional_connection_does_not_consume_width_height_widgets(self):
+        workflow = {
+            'nodes': [
+                {
+                    'id': 222,
+                    'type': 'MiniMaxH3ImageToVideo',
+                    'mode': 0,
+                    'inputs': [
+                        {'name': 'first_frame', 'link': 11},
+                        {'name': 'last_frame', 'link': None},
+                    ],
+                    'outputs': [{'name': 'video', 'links': []}],
+                    'widgets_values': ['', 1344, 768, 73],
+                    'properties': {},
+                }
+            ],
+            'links': [[11, 236, 0, 222, 0, 'IMAGE']],
+        }
+        object_info = {
+            'MiniMaxH3ImageToVideo': {
+                'input': {
+                    'required': {
+                        'first_frame': ['IMAGE', {}],
+                        'width': ['INT', {'default': 1344}],
+                        'height': ['INT', {'default': 768}],
+                        'length': ['INT', {'default': 73}],
+                    },
+                    'optional': {'last_frame': ['IMAGE', {}]},
+                }
+            }
+        }
+        prompt = ui_workflow_to_prompt(workflow, object_info)
+        inputs = prompt['222']['inputs']
+        self.assertEqual(inputs['first_frame'], ['236', 0])
+        self.assertNotIn('last_frame', inputs)
+        self.assertEqual(inputs['width'], 1344)
+        self.assertEqual(inputs['height'], 768)
+        self.assertEqual(inputs['length'], 73)
+
     def test_rejects_missing_required_node_type(self):
         workflow = {
             'nodes': [{'id': 1, 'type': 'MissingCustomNode', 'mode': 0, 'inputs': [], 'outputs': [{'name': 'x', 'links': [1]}], 'widgets_values': [], 'properties': {}}],
