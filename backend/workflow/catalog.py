@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from backend.db import Database
 from backend.models import WorkflowManifest
 from backend.workflow.analyzer import analyze_workflow
-from backend.workflow.manifest import LOCAL_WORKFLOW_ROOT, save_manifest
+from backend.workflow.manifest import LOCAL_WORKFLOW_ROOT, discover_manifests, save_manifest
 
 
 @dataclass
@@ -156,6 +156,57 @@ def _default_steps(category: str, inputs: list[dict[str, Any]]) -> list[str]:
         steps.append('确认视频时长和生成参数')
     steps.append('提交任务并等待 ComfyUI 完成')
     return steps
+
+
+def sync_catalog_to_db(db: Database) -> int:
+    """Restore workflow DB rows from package manifests without touching originals."""
+    synced = 0
+    now = _now()
+    for manifest_path, manifest in discover_manifests():
+        package_dir = manifest_path.parent
+        original_path = package_dir / 'original.json'
+        analysis_path = package_dir / 'analysis.json'
+        analysis: dict[str, Any] = {}
+        if analysis_path.is_file():
+            try:
+                analysis = json.loads(analysis_path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError):
+                analysis = {}
+        workflow_format = analysis.get('format')
+        compatibility = 'NEEDS_ADAPTER' if workflow_format == 'ui-workflow' else 'READY_FOR_DEPENDENCY_CHECK'
+        with db.connect() as conn:
+            existing = conn.execute('SELECT id FROM workflows WHERE id=?', (manifest.workflowId,)).fetchone()
+            if existing is not None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO workflows(
+                    id, name, category, source, source_url, description, difficulty,
+                    original_path, api_workflow_path, cover_path, manifest_json,
+                    manifest_version, enabled, compatibility_status, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    manifest.workflowId,
+                    manifest.name,
+                    manifest.category,
+                    manifest.source.name,
+                    manifest.source.url,
+                    manifest.description,
+                    manifest.difficulty,
+                    str(original_path),
+                    str(original_path) if workflow_format == 'api-workflow' else None,
+                    None,
+                    json.dumps(manifest.model_dump(mode='json'), ensure_ascii=False),
+                    1,
+                    1,
+                    compatibility,
+                    now,
+                    now,
+                ),
+            )
+        synced += 1
+    return synced
 
 
 def import_payload(filename: str, raw: bytes, db: Database, source_name: str = 'Local Import') -> dict[str, Any]:
