@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from backend.bindings import bindings_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.comfy.runtime import create_task as create_generation_task
 from backend.db import Database, ROOT
@@ -25,7 +26,7 @@ def create_app() -> FastAPI:
         app.state.db = db
         yield
 
-    app = FastAPI(title='ComfyWorkflowStudio API', version='0.4.0', lifespan=lifespan)
+    app = FastAPI(title='ComfyWorkflowStudio API', version='0.5.0', lifespan=lifespan)
 
     @app.get('/api/health')
     def health():
@@ -43,7 +44,7 @@ def create_app() -> FastAPI:
         return {
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
-            'phase': '1D',
+            'phase': '1E',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -63,9 +64,11 @@ def create_app() -> FastAPI:
         return {'connected': True, 'url': comfy_url_from_env(), 'stats': stats, 'queue': queue}
 
     @app.get('/api/workflows')
-    def list_workflows():
+    def list_workflows(capability: str | None = None):
         result = []
         for path, manifest in discover_manifests():
+            if capability and capability not in manifest.capabilities:
+                continue
             analysis_path = path.parent / 'analysis.json'
             analysis = {}
             if analysis_path.is_file():
@@ -235,6 +238,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail='output_file_missing')
         return FileResponse(path)
 
+    app.include_router(bindings_router(db))
     return app
 
 
