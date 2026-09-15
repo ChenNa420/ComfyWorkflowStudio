@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import shutil
 import threading
 import uuid
@@ -321,6 +322,10 @@ def _apply_manifest_values(
         if item.key not in parameters:
             continue
         value = parameters[item.key]
+        if item.type == 'seed' and isinstance(value, int) and not isinstance(value, bool) and value < 0:
+            # Clients use -1 to request a fresh seed. ComfyUI KSampler accepts
+            # only unsigned 64-bit values, so resolve the sentinel before POST.
+            value = secrets.randbits(64)
         is_duration = item.mapping.strategy == 'duration-to-frames' or item.key.lower() in {
             'duration', 'seconds', 'duration_seconds', 'video_duration'
         }

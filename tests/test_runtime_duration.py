@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from backend.comfy.runtime import _apply_dynamic_duration, _duration_plan
+from backend.comfy.runtime import _apply_dynamic_duration, _apply_manifest_values, _duration_plan
+from backend.models import WorkflowManifest
 
 
 class RuntimeDurationTests(unittest.TestCase):
@@ -98,6 +100,23 @@ class RuntimeDurationTests(unittest.TestCase):
             _duration_plan(0, {})
         with self.assertRaises(Exception):
             _duration_plan(-1, {})
+
+    def test_negative_seed_sentinel_becomes_unsigned_comfy_seed(self):
+        manifest = WorkflowManifest.model_validate({
+            'workflowId': 'seed-fixture',
+            'name': 'Seed fixture',
+            'category': 'image-to-video',
+            'parameters': [{
+                'key': 'seed', 'label': 'Seed', 'type': 'seed',
+                'mapping': {'nodeId': '1', 'field': 'seed'},
+            }],
+        })
+        prompt = {'1': {'class_type': 'KSampler', 'inputs': {'seed': 7}}}
+
+        with patch('backend.comfy.runtime.secrets.randbits', return_value=123456789):
+            _apply_manifest_values(prompt, manifest, {}, {'seed': -1}, {}, object())
+
+        self.assertEqual(prompt['1']['inputs']['seed'], 123456789)
 
 
 if __name__ == '__main__':
