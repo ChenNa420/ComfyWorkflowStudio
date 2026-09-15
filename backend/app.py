@@ -14,6 +14,7 @@ from backend.comfy.runtime import create_task as create_generation_task
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.catalog import import_payload
+from backend.workflow.knowledge_api import workflow_knowledge_router
 from backend.workflow.manifest import discover_manifests, load_manifest, save_manifest
 
 
@@ -26,7 +27,7 @@ def create_app() -> FastAPI:
         app.state.db = db
         yield
 
-    app = FastAPI(title='ComfyWorkflowStudio API', version='0.5.0', lifespan=lifespan)
+    app = FastAPI(title='ComfyWorkflowStudio API', version='0.6.0', lifespan=lifespan)
 
     @app.get('/api/health')
     def health():
@@ -44,7 +45,7 @@ def create_app() -> FastAPI:
         return {
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
-            'phase': '1E',
+            'phase': '1F',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -238,6 +239,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail='output_file_missing')
         return FileResponse(path)
 
+    app.include_router(workflow_knowledge_router(db))
     app.include_router(bindings_router(db))
     return app
 
