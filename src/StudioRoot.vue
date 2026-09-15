@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { ArrowLeft, WandSparkles } from 'lucide-vue-next'
 import AppPhase1D from './AppPhase1D.vue'
 import WorkflowAdapterPanel from './components/WorkflowAdapterPanel.vue'
+import WorkflowKnowledgePanel from './components/WorkflowKnowledgePanel.vue'
 
 const page = ref(location.hash.replace('#/', '') || 'dashboard')
 
@@ -20,6 +21,12 @@ onUnmounted(() => window.removeEventListener('hashchange', syncHash))
 
 <template>
   <AppPhase1D />
+
+  <div v-if="page === 'workflows'" class="adapter-overlay knowledge-overlay">
+    <section class="panel adapter-overlay-card knowledge-overlay-card">
+      <WorkflowKnowledgePanel />
+    </section>
+  </div>
 
   <div v-if="page === 'adapter'" class="adapter-overlay">
     <section class="panel adapter-overlay-card">
