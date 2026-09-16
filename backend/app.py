@@ -14,6 +14,7 @@ from backend.comfy.runtime import create_task as create_generation_task
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.catalog import import_payload
+from backend.workflow.dependencies import execution_node_types
 from backend.workflow.dependencies_api import workflow_dependencies_router
 from backend.workflow.knowledge_api import workflow_knowledge_router
 from backend.workflow.manifest import discover_manifests
@@ -137,19 +138,31 @@ def create_app() -> FastAPI:
 
     @app.get('/api/workflows/{workflow_id}/compatibility')
     def workflow_compatibility(workflow_id: str):
-        analysis = workflow_analysis(workflow_id)
-        node_types = analysis.get('nodeTypes') or [] if isinstance(analysis, dict) else []
-        try:
-            object_info = ComfyClient(comfy_url_from_env(), timeout=10).object_info()
-        except ComfyClientError as exc:
-            return {'workflowId': workflow_id, 'status': 'COMFY_OFFLINE', 'missingNodes': [], 'error': str(exc)}
-        missing = [node_type for node_type in node_types if node_type not in object_info and node_type not in {'PixaromaNote', 'PixaromaLabel', 'Note', 'MarkdownNote'}]
-        return {
-            'workflowId': workflow_id,
-            'status': 'READY' if not missing else 'MISSING_NODES',
-            'missingNodes': missing,
-            'checkedNodeTypes': len(node_types),
-        }
+        for path, manifest in discover_manifests():
+            if manifest.workflowId != workflow_id:
+                continue
+            analysis_path = path.parent / 'analysis.json'
+            analysis = {}
+            if analysis_path.is_file():
+                try:
+                    value = json.loads(analysis_path.read_text(encoding='utf-8'))
+                    analysis = value if isinstance(value, dict) else {}
+                except (OSError, json.JSONDecodeError):
+                    analysis = {}
+            try:
+                object_info = ComfyClient(comfy_url_from_env(), timeout=10).object_info()
+            except ComfyClientError as exc:
+                return {'workflowId': workflow_id, 'status': 'COMFY_OFFLINE', 'missingNodes': [], 'ignoredNodeTypes': [], 'error': str(exc)}
+            node_types, ignored = execution_node_types(path, analysis, connected=True, object_info=object_info)
+            missing = [node_type for node_type in node_types if node_type not in object_info]
+            return {
+                'workflowId': workflow_id,
+                'status': 'READY' if not missing else 'MISSING_NODES',
+                'missingNodes': missing,
+                'ignoredNodeTypes': ignored,
+                'checkedNodeTypes': len(node_types),
+            }
+        raise HTTPException(status_code=404, detail='workflow_not_found')
 
     @app.post('/api/workflows/import')
     async def import_workflows(files: list[UploadFile] = File(...)):
