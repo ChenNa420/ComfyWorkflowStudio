@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.db import Database
+from backend.db import Database, ROOT
 from backend.models import WorkflowManifest
 from backend.workflow.manifest import discover_manifests, save_manifest
 
@@ -27,7 +27,16 @@ def _manifest_hash(manifest: WorkflowManifest) -> str:
 
 
 def _history_dir(manifest_path: Path) -> Path:
-    return manifest_path.parent / HISTORY_DIR_NAME
+    resolved = manifest_path.resolve()
+    try:
+        resolved.relative_to(ROOT.resolve())
+    except ValueError:
+        # Unit tests and external temporary packages keep history beside the
+        # temporary manifest so they never pollute the real repository.
+        return manifest_path.parent / HISTORY_DIR_NAME
+    # Production history belongs to ignored local storage, never to the
+    # third-party Workflow Package or tracked workflows directory.
+    return ROOT / 'storage' / HISTORY_DIR_NAME / manifest_path.parent.name
 
 
 def _snapshot_payload(
