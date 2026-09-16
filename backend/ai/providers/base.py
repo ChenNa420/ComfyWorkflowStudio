@@ -8,8 +8,9 @@ class ComicAiProvider(Protocol):
     name: str
     enabled: bool
 
-    def analyze_comic_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]: ...
-    def rewrite_story(self, analysis: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]: ...
+    def get_status(self) -> dict[str, Any]: ...
+    def analyze_comic_pages(self, pages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def adapt_story(self, analysis: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]: ...
     def generate_episode(self, story: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]: ...
 
 
@@ -18,4 +19,7 @@ def get_comic_ai_provider() -> ComicAiProvider:
     if provider in {'', 'disabled', 'none', 'off'}:
         from .disabled import DisabledComicAiProvider
         return DisabledComicAiProvider()
-    raise RuntimeError(f'comic_ai_provider_not_configured: {provider}')
+    if provider in {'openai_compatible', 'openai-compatible'}:
+        from .openai_compatible import OpenAICompatibleComicProvider
+        return OpenAICompatibleComicProvider()
+    raise RuntimeError('AI_PROVIDER_UNAVAILABLE')

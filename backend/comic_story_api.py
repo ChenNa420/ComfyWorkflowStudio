@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from backend.ai.providers import get_comic_ai_provider
+from backend.ai.service import ComicAiError, ComicAiService
 
 SUPPORTED_FILES = {'.pdf', '.cbz', '.zip', '.png', '.jpg', '.jpeg', '.webp'}
 IMAGE_FILES = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -33,6 +34,27 @@ class ComicAnalyzeRequest(BaseModel):
     token: str
     startPage: int = Field(default=1, ge=1)
     endPage: int | None = Field(default=None, ge=1)
+    forceRefresh: bool = False
+
+
+class ComicAdaptRequest(BaseModel):
+    semanticAnalysisId: str
+    style: str = '温馨治愈'
+    audience: str = '3-8岁儿童'
+    language: str = '中文（简体）'
+    level: str = 'Pre-A1'
+    educationGoals: list[str] = Field(default_factory=list)
+    fidelity: str = 'balanced'
+    preserveCharacterNames: bool = True
+    preserveCorePlot: bool = True
+    preserveDialogue: bool = False
+    shotCount: int = Field(default=6, ge=1, le=12)
+    aspectRatio: str = '9:16'
+
+
+class ComicEpisodeRequest(BaseModel):
+    adaptedStory: dict
+    settings: dict = Field(default_factory=dict)
 
 
 class ComicDraftRequest(BaseModel):
@@ -192,6 +214,15 @@ def _first_sentence(text: str) -> str:
     return (pieces[0] if pieces else text)[:280]
 
 
+def _service():
+    return ComicAiService(get_comic_ai_provider(), Path('storage/comic-analysis'))
+
+
+def _ai_error(exc: ComicAiError):
+    status = 409 if exc.code in {'AI_PROVIDER_DISABLED', 'AI_MODEL_NOT_CONFIGURED'} else 413 if exc.code == 'AI_CONTEXT_TOO_LARGE' else 502
+    raise HTTPException(status_code=status, detail={'code': exc.code, 'message': str(exc)}) from exc
+
+
 def comic_story_router() -> APIRouter:
     router = APIRouter(prefix='/api/comic-story', tags=['comic-story'])
 
@@ -199,6 +230,14 @@ def comic_story_router() -> APIRouter:
     def suggested_roots():
         provider = get_comic_ai_provider()
         return {'roots': _candidate_roots(), 'provider': {'name': provider.name, 'enabled': provider.enabled}}
+
+    @router.get('/ai/status')
+    def ai_status():
+        try:
+            return _service().status()
+        except RuntimeError as exc:
+            return {'provider': 'unknown', 'enabled': False, 'configured': False, 'model': None,
+                    'baseUrlSafe': '', 'supportsVision': False, 'reason': str(exc)}
 
     @router.post('/scan')
     def scan_library(payload: ComicScanRequest):
@@ -299,6 +338,36 @@ def comic_story_router() -> APIRouter:
             'message': '已完成本地页面与文本提取；角色、场景、剧情语义分析将在 AI Provider 接入后增强。',
         }
 
+    @router.post('/semantic-analyze')
+    def semantic_analyze(payload: ComicAnalyzeRequest):
+        path = _assert_registered(payload.token)
+        _, pages = _source_pages(path, payload.startPage, payload.endPage)
+        if len(pages) > 12:
+            raise HTTPException(status_code=413, detail={'code': 'AI_CONTEXT_TOO_LARGE', 'message': '最多一次分析 12 页'})
+        try:
+            return _service().analyze(path, payload.token, pages, payload.forceRefresh)
+        except ComicAiError as exc:
+            _ai_error(exc)
+
+    @router.post('/adapt-story')
+    def adapt_story(payload: ComicAdaptRequest):
+        cache = Path('storage/comic-analysis') / f'{payload.semanticAnalysisId}.json'
+        if not cache.is_file():
+            raise HTTPException(status_code=404, detail={'code': 'SEMANTIC_ANALYSIS_NOT_FOUND'})
+        try:
+            semantic = __import__('json').loads(cache.read_text(encoding='utf-8'))
+            value = _service().adapt(semantic, payload.model_dump(exclude={'semanticAnalysisId'}))
+            return {'semanticAnalysisId': payload.semanticAnalysisId, 'adaptedStory': value}
+        except ComicAiError as exc:
+            _ai_error(exc)
+
+    @router.post('/generate-episode')
+    def generate_episode(payload: ComicEpisodeRequest):
+        try:
+            return {'episode': _service().episode(payload.adaptedStory, payload.settings)}
+        except ComicAiError as exc:
+            _ai_error(exc)
+
     @router.post('/draft')
     def generate_draft(payload: ComicDraftRequest):
         path = _assert_registered(payload.token)
@@ -320,6 +389,8 @@ def comic_story_router() -> APIRouter:
                 'imagePrompt': f'Use comic page {source["page"]} as the visual reference. Preserve the original characters, clothing, props and setting.',
                 'videoPrompt': f'Animate the scene from comic page {source["page"]} with restrained natural motion and consistent characters.',
                 'negativePrompt': 'character drift, extra limbs, duplicated props, text artifacts, watermark',
+                'sourcePages': [source['page']],
+                'dialogueSource': 'source' if source_text else 'pending',
             })
 
         episode_shots = []
@@ -350,11 +421,12 @@ def comic_story_router() -> APIRouter:
                 'characters': [],
                 'characterDefinitions': [],
                 'scenes': [],
+                'learningObjectives': [payload.educationalGoal] if payload.educationalGoal else [],
                 'source': {
-                    'token': payload.token,
+                    'type': 'comic',
+                    'fileToken': payload.token,
                     'name': path.name,
-                    'pageCount': total,
-                    'selectedPages': [item['page'] for item in pages],
+                    'pages': [item['page'] for item in pages],
                 },
                 'shots': episode_shots,
             },
