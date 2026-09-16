@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from backend.db import Database
-from backend.workflow.manifest_review import apply_safe_manifest_review, manifest_review_queue
+from backend.workflow.manifest_review import (
+    apply_safe_manifest_review,
+    manifest_review_batch,
+    manifest_review_queue,
+)
 
 
 def manifest_review_router(db: Database) -> APIRouter:
@@ -21,6 +25,10 @@ def manifest_review_router(db: Database) -> APIRouter:
         if maxScore is not None:
             items = [item for item in items if item['completeness']['score'] <= maxScore]
         return items[:limit]
+
+    @router.post('/batch-preview')
+    def batch_preview(workflowIds: list[str] = Body(..., embed=True)):
+        return manifest_review_batch(workflowIds)
 
     @router.get('/{workflow_id}')
     def review_detail(workflow_id: str):
