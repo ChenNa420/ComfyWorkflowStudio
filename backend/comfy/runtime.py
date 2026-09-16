@@ -56,7 +56,7 @@ def _update_task(db: Database, task_id: str, **values: Any) -> None:
         conn.execute(f'UPDATE generation_tasks SET {fields} WHERE id=?', (*values.values(), task_id))
 
 
-def create_task(db: Database, payload: GenerationTaskCreate) -> str:
+def create_task(db: Database, payload: GenerationTaskCreate, *, start: bool = True) -> str:
     task_id = f'task-{uuid.uuid4().hex[:12]}'
     with db.connect() as conn:
         row = conn.execute('SELECT id FROM workflows WHERE id=?', (payload.workflowId,)).fetchone()
@@ -84,9 +84,14 @@ def create_task(db: Database, payload: GenerationTaskCreate) -> str:
             ),
         )
     _event(db, task_id, 'CREATED', '任务已创建')
+    if start:
+        start_task(db, task_id)
+    return task_id
+
+
+def start_task(db: Database, task_id: str) -> None:
     thread = threading.Thread(target=_run_task_guarded, args=(db, task_id), daemon=True, name=f'cws-{task_id}')
     thread.start()
-    return task_id
 
 
 def _run_task_guarded(db: Database, task_id: str) -> None:
@@ -154,6 +159,19 @@ def run_task(db: Database, task_id: str) -> None:
     _update_task(db, task_id, runtime_workflow_path=str(runtime_path), status='SUBMITTING', progress=0.12)
     _event(db, task_id, 'SUBMITTING', '提交到 ComfyUI')
 
+    with db.connect() as conn:
+        pilot = conn.execute(
+            "SELECT 1 FROM generation_task_events WHERE task_id=? AND event='PILOT_AUTHORIZED' LIMIT 1", (task_id,)
+        ).fetchone()
+    if pilot:
+        from backend.workflow.preflight import PREFLIGHT_CERTIFIED, preflight_detail
+        final_preflight = preflight_detail(db, workflow['id'], force_refresh=True)
+        if not final_preflight or final_preflight['status'] != PREFLIGHT_CERTIFIED or final_preflight.get('dependencyStatus') != 'READY':
+            raise WorkflowConversionError('PILOT_PREFLIGHT_CHANGED: runtime submission refused')
+        _event(db, task_id, 'PILOT_FINAL_PREFLIGHT', 'Certified immediately before /prompt', {
+            'status': final_preflight['status'], 'sourceFormat': final_preflight['sourceFormat'],
+        })
+
     response = client.submit_prompt(prompt)
     prompt_id = str(response.get('prompt_id') or '')
     if not prompt_id:
@@ -171,6 +189,8 @@ def run_task(db: Database, task_id: str) -> None:
 
     _update_task(db, task_id, progress=0.92)
     saved = _collect_outputs(db, task_id, workflow['id'], history, client)
+    if not saved:
+        raise RuntimeError('OUTPUT_NOT_FOUND: ComfyUI completed without a confirmable output file')
     _update_task(db, task_id, status='SUCCEEDED', progress=1.0, finished_at=_now(), error=None)
     _event(db, task_id, 'SUCCEEDED', f'生成完成，共保存 {len(saved)} 个输出', {'outputs': saved})
 

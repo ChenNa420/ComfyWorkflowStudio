@@ -23,6 +23,7 @@ from backend.workflow.manifest_history_api import manifest_history_router
 from backend.workflow.manifest_review_api import manifest_review_router
 from backend.workflow.readiness_api import workflow_readiness_router
 from backend.workflow.remediation_guides_api import remediation_guides_router
+from backend.workflow.pilot_api import workflow_pilot_router
 
 
 def create_app() -> FastAPI:
@@ -53,7 +54,7 @@ def create_app() -> FastAPI:
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
             'phase': '1G',
-            'subphase': '1G-3',
+            'subphase': '1G-4',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -267,6 +268,7 @@ def create_app() -> FastAPI:
     app.include_router(manifest_history_router(db))
     app.include_router(workflow_readiness_router(db))
     app.include_router(remediation_guides_router())
+    app.include_router(workflow_pilot_router(db))
     app.include_router(bindings_router(db))
     return app
 
