@@ -48,39 +48,121 @@ def _walk_strings(value: Any):
             yield from _walk_strings(child)
 
 
-def extract_comfy_model_options(object_info: dict[str, Any]) -> set[str]:
-    """Collect model filenames exposed by ComfyUI node input enums.
+def classify_model_type(node_type: str, field_name: str, model_name: str) -> str:
+    text = f'{node_type} {field_name} {model_name}'.casefold().replace('-', '_')
+    if any(token in text for token in ('control_net', 'controlnet')):
+        return 'controlnet'
+    if 'lora' in text:
+        return 'lora'
+    if 'clip_vision' in text or 'vision_model' in text:
+        return 'vision'
+    if any(token in text for token in ('text_encoder', 'clip_name', 'cliploader', 'dualclip', 'tripleclip')):
+        return 'text-encoder'
+    if 'vae' in text:
+        return 'vae'
+    if any(token in text for token in ('upscale_model', 'upscalemodel', 'esrgan')):
+        return 'upscaler'
+    if any(token in text for token in ('ipadapter', 'instantid', 'pulid', 'adapter_model')):
+        return 'adapter'
+    if any(token in text for token in ('vocoder', 'tts', 'voice_model', 'audio_model', 'speech_model')):
+        return 'audio'
+    if any(token in text for token in ('ckpt_name', 'checkpoint', 'checkpointloader')):
+        return 'checkpoint'
+    if any(token in text for token in ('unet_name', 'diffusion_model', 'diffusionmodel', 'transformer_model', 'wanvideomodel', 'ggufloader')):
+        return 'diffusion-model'
+    return 'other'
 
-    This intentionally uses `/object_info` instead of scanning arbitrary local
-    directories, so Phase 1F stays read-only and respects the active ComfyUI
-    installation's own model registry.
+
+def extract_comfy_model_catalog(object_info: dict[str, Any]) -> list[dict[str, str]]:
+    """Return model options exposed by ComfyUI, with deterministic type hints.
+
+    The catalog is built only from `/object_info`. It does not scan arbitrary
+    directories or mutate the user's ComfyUI installation.
     """
-    result: set[str] = set()
-    for definition in object_info.values():
+    items: dict[tuple[str, str], dict[str, str]] = {}
+    for node_type, definition in object_info.items():
         if not isinstance(definition, dict):
             continue
         inputs = definition.get('input')
         if not isinstance(inputs, dict):
             continue
-        for text in _walk_strings(inputs):
-            normalized = text.replace('\\', '/').strip()
-            if normalized.lower().endswith(MODEL_EXTENSIONS):
-                result.add(normalized)
+        for section_name in ('required', 'optional', 'hidden'):
+            section = inputs.get(section_name)
+            if not isinstance(section, dict):
+                continue
+            for field_name, spec in section.items():
+                for text in _walk_strings(spec):
+                    normalized = text.replace('\\', '/').strip()
+                    if not normalized.lower().endswith(MODEL_EXTENSIONS):
+                        continue
+                    model_type = classify_model_type(str(node_type), str(field_name), normalized)
+                    key = (_normalize(normalized), model_type)
+                    items.setdefault(key, {
+                        'name': normalized,
+                        'modelType': model_type,
+                        'nodeType': str(node_type),
+                        'field': str(field_name),
+                    })
+    result = list(items.values())
+    result.sort(key=lambda item: (item['modelType'], item['name'].casefold()))
     return result
 
 
-def match_declared_model(name: str, available: set[str]) -> dict[str, Any]:
+def extract_comfy_model_options(object_info: dict[str, Any]) -> set[str]:
+    return {item['name'] for item in extract_comfy_model_catalog(object_info)}
+
+
+def _catalog_matches(name: str, catalog: list[dict[str, str]], *, basename: bool = False) -> list[dict[str, str]]:
+    declared = _basename(name) if basename else _normalize(name)
+    result: list[dict[str, str]] = []
+    for item in catalog:
+        candidate = _basename(item['name']) if basename else _normalize(item['name'])
+        if candidate == declared:
+            result.append(item)
+    return result
+
+
+def match_declared_model(
+    name: str,
+    available: set[str],
+    catalog: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     declared = _normalize(name)
     declared_base = _basename(name)
     exact = {_normalize(item): item for item in available}
+    catalog = catalog or []
+    inferred_type = classify_model_type('', '', name)
     if declared in exact:
-        return {'status': 'PRESENT', 'matched': exact[declared], 'match': 'exact'}
+        catalog_matches = _catalog_matches(name, catalog)
+        model_types = sorted({item['modelType'] for item in catalog_matches})
+        return {
+            'status': 'PRESENT',
+            'matched': exact[declared],
+            'match': 'exact',
+            'modelType': model_types[0] if len(model_types) == 1 else inferred_type,
+            'modelTypes': model_types or [inferred_type],
+        }
     basename_matches = [item for item in available if _basename(item) == declared_base]
-    if len(basename_matches) == 1:
-        return {'status': 'PRESENT', 'matched': basename_matches[0], 'match': 'basename'}
-    if len(basename_matches) > 1:
-        return {'status': 'PRESENT', 'matched': basename_matches[0], 'match': 'basename-ambiguous', 'alternatives': basename_matches[:20]}
-    return {'status': 'MISSING', 'matched': None, 'match': None}
+    if basename_matches:
+        catalog_matches = _catalog_matches(name, catalog, basename=True)
+        model_types = sorted({item['modelType'] for item in catalog_matches})
+        payload = {
+            'status': 'PRESENT',
+            'matched': basename_matches[0],
+            'match': 'basename' if len(basename_matches) == 1 else 'basename-ambiguous',
+            'modelType': model_types[0] if len(model_types) == 1 else inferred_type,
+            'modelTypes': model_types or [inferred_type],
+        }
+        if len(basename_matches) > 1:
+            payload['alternatives'] = basename_matches[:20]
+        return payload
+    return {
+        'status': 'MISSING',
+        'matched': None,
+        'match': None,
+        'modelType': inferred_type,
+        'modelTypes': [inferred_type],
+    }
 
 
 def _workflow_dependency_item(
@@ -90,6 +172,7 @@ def _workflow_dependency_item(
     connected: bool,
     object_info: dict[str, Any],
     available_models: set[str],
+    model_catalog: list[dict[str, str]],
 ) -> dict[str, Any]:
     analysis = _load_analysis(manifest_path)
     node_types = [
@@ -100,9 +183,16 @@ def _workflow_dependency_item(
     model_items: list[dict[str, Any]] = []
     for dependency in manifest.dependencies.models:
         if connected:
-            match = match_declared_model(dependency.name, available_models)
+            match = match_declared_model(dependency.name, available_models, model_catalog)
         else:
-            match = {'status': 'UNKNOWN', 'matched': None, 'match': None}
+            inferred_type = classify_model_type('', '', dependency.name)
+            match = {
+                'status': 'UNKNOWN',
+                'matched': None,
+                'match': None,
+                'modelType': inferred_type,
+                'modelTypes': [inferred_type],
+            }
         model_items.append({
             'name': dependency.name,
             'required': dependency.required,
@@ -171,7 +261,8 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
     except ComfyClientError as exc:
         error = str(exc)
 
-    available_models = extract_comfy_model_options(object_info) if connected else set()
+    model_catalog = extract_comfy_model_catalog(object_info) if connected else []
+    available_models = {item['name'] for item in model_catalog}
     workflows = [
         _workflow_dependency_item(
             path,
@@ -179,6 +270,7 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
             connected=connected,
             object_info=object_info,
             available_models=available_models,
+            model_catalog=model_catalog,
         )
         for path, manifest in discover_manifests()
     ]
@@ -191,11 +283,18 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
                 'name': item['name'],
                 'status': item['status'],
                 'matched': item.get('matched'),
+                'modelType': item.get('modelType') or 'other',
+                'modelTypes': list(item.get('modelTypes') or [item.get('modelType') or 'other']),
                 'workflows': [],
             })
+            for model_type in item.get('modelTypes') or []:
+                if model_type not in entry['modelTypes']:
+                    entry['modelTypes'].append(model_type)
             if item['status'] == 'PRESENT':
                 entry['status'] = 'PRESENT'
                 entry['matched'] = item.get('matched')
+                if item.get('modelType') and item.get('modelType') != 'other':
+                    entry['modelType'] = item['modelType']
             elif entry['status'] != 'PRESENT' and item['status'] == 'MISSING':
                 entry['status'] = 'MISSING'
             entry['workflows'].append({'id': workflow['workflowId'], 'name': workflow['name']})
@@ -205,7 +304,7 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
         for item in workflow['nodeTypes']:
             node_usage[item['nodeType']].append({'id': workflow['workflowId'], 'name': workflow['name']})
 
-    model_rows = sorted(model_usage.values(), key=lambda item: (item['status'] != 'MISSING', item['name'].casefold()))
+    model_rows = sorted(model_usage.values(), key=lambda item: (item['status'] != 'MISSING', item['modelType'], item['name'].casefold()))
     node_rows = [
         {
             'nodeType': node_type,
@@ -217,6 +316,7 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
     node_rows.sort(key=lambda item: (item['status'] != 'MISSING', item['nodeType'].casefold()))
 
     status_counts = Counter(item['status'] for item in workflows)
+    type_counts = Counter(item['modelType'] for item in model_rows)
     return {
         'connected': connected,
         'comfyUiUrl': client.base_url,
@@ -231,10 +331,12 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
             'missingModels': sum(1 for item in model_rows if item['status'] == 'MISSING'),
             'requiredNodeTypes': len(node_rows),
             'missingNodeTypes': sum(1 for item in node_rows if item['status'] == 'MISSING'),
+            'modelTypes': [{'key': key, 'count': count} for key, count in type_counts.most_common()],
         },
         'workflows': workflows,
         'models': model_rows,
         'nodeTypes': node_rows,
+        'modelCatalog': model_catalog,
     }
 
 
