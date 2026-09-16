@@ -98,6 +98,10 @@ def _validate_manifest_mappings(
 
     for item in manifest.parameters:
         mapping = item.mapping
+        runtime_duration = manifest.runtime.durationPolicy == 'dynamic' and (
+            mapping.strategy == 'duration-to-frames'
+            or item.key.lower() in {'duration', 'seconds', 'duration_seconds', 'video_duration'}
+        )
         if not mapping.nodeId:
             warnings.append(
                 _issue(
@@ -110,6 +114,11 @@ def _validate_manifest_mappings(
             continue
         node = prompt.get(str(mapping.nodeId))
         if not isinstance(node, dict):
+            # Runtime applies dynamic duration across the converted prompt from
+            # durationState metadata. Its UI helper node may intentionally be
+            # removed by the converter, so that node is not a required target.
+            if runtime_duration:
+                continue
             errors.append(
                 _issue(
                     'PARAMETER_NODE_MISSING',
@@ -122,6 +131,8 @@ def _validate_manifest_mappings(
         node_inputs = node.get('inputs') if isinstance(node.get('inputs'), dict) else {}
         field = _resolve_prompt_field(node_inputs, mapping.field)
         if mapping.field and field not in node_inputs:
+            if runtime_duration:
+                continue
             errors.append(
                 _issue(
                     'PARAMETER_FIELD_MISSING',

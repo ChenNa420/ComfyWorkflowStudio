@@ -126,6 +126,33 @@ class Phase1G3PreflightTests(unittest.TestCase):
         self.assertEqual(result['status'], PREFLIGHT_NEEDS_REVIEW)
         self.assertIn('REQUIRED_INPUT_MAPPING_MISSING', {item['code'] for item in result['errors']})
 
+    def test_dynamic_duration_ui_helper_removed_by_converter_is_certified(self):
+        payload = self.manifest().model_dump(mode='json')
+        payload['runtime']['durationPolicy'] = 'dynamic'
+        payload['parameters'].append(
+            {
+                'key': 'duration',
+                'label': '视频时长',
+                'type': 'number',
+                'default': 4,
+                'mapping': {
+                    'nodeId': '238',
+                    'field': 'duration',
+                    'strategy': 'duration-to-frames',
+                },
+            }
+        )
+        result = preflight_one(
+            WorkflowManifest.model_validate(payload),
+            self.manifest_path,
+            db_row=self.row(),
+            dependency={'status': 'READY'},
+            object_info=self.object_info,
+        )
+        self.assertEqual(result['status'], PREFLIGHT_CERTIFIED)
+        self.assertNotIn('PARAMETER_NODE_MISSING', {item['code'] for item in result['errors']})
+        self.assertNotIn('PARAMETER_FIELD_MISSING', {item['code'] for item in result['errors']})
+
     def test_missing_dependency_blocks_before_runtime_certification(self):
         result = preflight_one(
             self.manifest(),
