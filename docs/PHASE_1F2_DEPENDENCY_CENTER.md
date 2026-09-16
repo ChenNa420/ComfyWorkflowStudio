@@ -41,8 +41,13 @@ Manifest 的 `dependencies.customNodes` 是包级声明；实际能否执行以 
 
 Phase 1F-2 不根据包名猜测安装状态。
 
+### 快照缓存
+
+依赖 Inventory 默认使用短时缓存，避免依赖中心多个并行请求重复拉取大型 `/object_info`。显式刷新时可通过 `forceRefresh=true` 重新获取当前 ComfyUI 快照。
+
 ## Dependency APIs
 
+- `GET /api/dependencies/inventory`
 - `GET /api/dependencies/summary`
 - `GET /api/dependencies/workflows`
 - `GET /api/dependencies/workflows/{workflowId}`
@@ -105,7 +110,6 @@ python scripts\phase1f2_dependency_smoke.py
 
 Phase 1F-3 可继续做：
 
-- 依赖快照缓存，避免多个 UI 请求重复拉取大型 `/object_info`。
 - 模型类型细分（checkpoint / diffusion model / VAE / CLIP / ControlNet / LoRA）。
 - 工作流批量人工审核工作台。
 - 已确认 Manifest 的版本历史和回滚。
