@@ -16,7 +16,9 @@ from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.catalog import import_payload
 from backend.workflow.dependencies_api import workflow_dependencies_router
 from backend.workflow.knowledge_api import workflow_knowledge_router
-from backend.workflow.manifest import discover_manifests, load_manifest, save_manifest
+from backend.workflow.manifest import discover_manifests, load_manifest
+from backend.workflow.manifest_history import save_manifest_with_history
+from backend.workflow.manifest_history_api import manifest_history_router
 from backend.workflow.manifest_review_api import manifest_review_router
 
 
@@ -29,7 +31,7 @@ def create_app() -> FastAPI:
         app.state.db = db
         yield
 
-    app = FastAPI(title='ComfyWorkflowStudio API', version='0.7.0', lifespan=lifespan)
+    app = FastAPI(title='ComfyWorkflowStudio API', version='0.8.0', lifespan=lifespan)
 
     @app.get('/api/health')
     def health():
@@ -106,15 +108,17 @@ def create_app() -> FastAPI:
     def update_workflow_manifest(workflow_id: str, payload: WorkflowManifest):
         if payload.workflowId != workflow_id:
             raise HTTPException(status_code=400, detail='workflow_id_mismatch')
-        for path, _ in discover_manifests():
-            if path.parent.name == workflow_id or load_manifest(path).workflowId == workflow_id:
-                save_manifest(payload, path)
-                with db.connect() as conn:
-                    conn.execute(
-                        'UPDATE workflows SET name=?,category=?,description=?,difficulty=?,manifest_json=?,updated_at=datetime(\'now\') WHERE id=?',
-                        (payload.name, payload.category, payload.description, payload.difficulty, json.dumps(payload.model_dump(mode='json'), ensure_ascii=False), workflow_id),
-                    )
-                return {'ok': True, 'workflowId': workflow_id}
+        for path, current in discover_manifests():
+            if path.parent.name == workflow_id or current.workflowId == workflow_id:
+                versions = save_manifest_with_history(
+                    db,
+                    path,
+                    current,
+                    payload,
+                    action='manual-update',
+                    note='通过 Workflow Manifest API 更新。',
+                )
+                return {'ok': True, 'workflowId': workflow_id, 'versions': versions}
         raise HTTPException(status_code=404, detail='workflow_not_found')
 
     @app.get('/api/workflows/{workflow_id}/analysis')
@@ -244,6 +248,7 @@ def create_app() -> FastAPI:
     app.include_router(workflow_knowledge_router(db))
     app.include_router(workflow_dependencies_router())
     app.include_router(manifest_review_router(db))
+    app.include_router(manifest_history_router(db))
     app.include_router(bindings_router(db))
     return app
 
