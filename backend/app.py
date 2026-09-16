@@ -34,7 +34,7 @@ def create_app() -> FastAPI:
         app.state.db = db
         yield
 
-    app = FastAPI(title='ComfyWorkflowStudio API', version='0.10.0', lifespan=lifespan)
+    app = FastAPI(title='ComfyWorkflowStudio API', version='0.11.0', lifespan=lifespan)
 
     @app.get('/api/health')
     def health():
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
             'phase': '1G',
-            'subphase': '1G-2',
+            'subphase': '1G-3',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -265,7 +265,7 @@ def create_app() -> FastAPI:
     app.include_router(workflow_dependencies_router())
     app.include_router(manifest_review_router(db))
     app.include_router(manifest_history_router(db))
-    app.include_router(workflow_readiness_router())
+    app.include_router(workflow_readiness_router(db))
     app.include_router(remediation_guides_router())
     app.include_router(bindings_router(db))
     return app
