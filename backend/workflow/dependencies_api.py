@@ -8,9 +8,13 @@ from backend.workflow.dependencies import dependency_inventory, dependency_workf
 def workflow_dependencies_router() -> APIRouter:
     router = APIRouter(prefix='/api/dependencies', tags=['workflow-dependencies'])
 
+    @router.get('/inventory')
+    def inventory(forceRefresh: bool = Query(default=False)):
+        return dependency_inventory(force_refresh=forceRefresh)
+
     @router.get('/summary')
-    def summary():
-        inventory = dependency_inventory()
+    def summary(forceRefresh: bool = Query(default=False)):
+        inventory = dependency_inventory(force_refresh=forceRefresh)
         return {
             'connected': inventory['connected'],
             'comfyUiUrl': inventory['comfyUiUrl'],
