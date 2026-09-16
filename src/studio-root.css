@@ -1,4 +1,4 @@
-.adapter-overlay{position:fixed;z-index:40;left:248px;right:28px;top:92px;bottom:28px;overflow:auto;padding:2px}
+body:has(.knowledge-overlay) .content>section{display:none}.adapter-overlay{position:fixed;z-index:40;left:248px;right:28px;top:92px;bottom:28px;overflow:auto;padding:2px}
 .adapter-overlay-card{min-height:100%;padding:24px;background:rgba(255,255,255,.98);backdrop-filter:blur(10px);box-shadow:0 20px 60px rgba(31,35,64,.18)}
 .adapter-overlay-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid #e7eaf3}
 .adapter-overlay-head h2{display:flex;align-items:center;gap:9px;margin:4px 0 8px;font-size:22px}
@@ -33,3 +33,21 @@
   .adapter-overlay-card{padding:14px}
   .adapter-overlay-head{gap:12px;flex-direction:column}
 }
+
+/* Phase 1H-1 UI regression: style the functional adapter form as a first-class panel. */
+.adapter-functional{min-width:0}
+.adapter-toolbar>div{min-width:0}
+.adapter-toolbar h3{margin:4px 0 0;color:#2f3654;font-size:18px;line-height:1.35;overflow-wrap:anywhere}
+.adapter-functional .adapter-meta{grid-template-columns:minmax(0,1fr) minmax(220px,.45fr);gap:12px}
+.adapter-functional .adapter-meta label,.adapter-functional .adapter-description{display:grid;gap:7px;color:#444b69;font-size:12px;font-weight:600}
+.adapter-functional .adapter-meta input,.adapter-functional .adapter-description textarea,.adapter-functional .adapter-label-input,.adapter-functional .functional-node select{width:100%;min-width:0;border:1px solid #dde2ef;border-radius:10px;background:#fbfcff;color:#2a304f;padding:10px 11px;outline:none;box-shadow:none}
+.adapter-functional .adapter-meta input:focus,.adapter-functional .adapter-description textarea:focus,.adapter-functional .adapter-label-input:focus,.adapter-functional .functional-node select:focus,.adapter-functional .workflow-select:focus{border-color:#8c7cf2;box-shadow:0 0 0 3px rgba(116,100,244,.10)}
+.adapter-functional .adapter-description{margin-top:12px}
+.adapter-functional .adapter-description textarea{min-height:96px;resize:vertical;font-weight:400;line-height:1.55}
+.adapter-functional>div>h3{margin:20px 0 10px;color:#303855;font-size:16px}
+.adapter-functional .notice{margin-top:8px;padding:12px 14px;border:1px solid #e2e7f2;border-radius:10px;background:#f5f7ff;color:#667197;font-size:11px;line-height:1.55}
+.adapter-functional .functional-node{padding:12px 0;border-bottom:1px solid #edf0f6}
+.adapter-functional .functional-node b,.adapter-functional .functional-node small{display:block}
+.adapter-functional .functional-node b{font-size:12px;color:#3f4665}
+.adapter-functional .functional-node small{margin-top:3px;color:#8a92aa;font-size:10px}
+@media(max-width:900px){.adapter-functional .adapter-meta{grid-template-columns:1fr}.functional-node{grid-template-columns:1fr}}
