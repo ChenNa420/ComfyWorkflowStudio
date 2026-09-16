@@ -16,6 +16,7 @@ def _manifest_index() -> dict[str, tuple[Path, WorkflowManifest]]:
 
 def _candidate_node_packages(workflow_ids: list[str], manifests: dict[str, tuple[Path, WorkflowManifest]]) -> list[dict[str, Any]]:
     counts: Counter[tuple[str, str]] = Counter()
+    unambiguous_counts: Counter[tuple[str, str]] = Counter()
     evidence: defaultdict[tuple[str, str], list[str]] = defaultdict(list)
     for workflow_id in workflow_ids:
         found = manifests.get(workflow_id)
@@ -23,25 +24,40 @@ def _candidate_node_packages(workflow_ids: list[str], manifests: dict[str, tuple
             continue
         _, manifest = found
         packages = [dependency for dependency in manifest.dependencies.customNodes if dependency.name.strip()]
-        for dependency in packages:
-            key = (dependency.name.strip(), (dependency.installUrl or '').strip())
+        unique_keys = list(dict.fromkeys((dependency.name.strip(), (dependency.installUrl or '').strip()) for dependency in packages))
+        for key in unique_keys:
             counts[key] += 1
             evidence[key].append(workflow_id)
+        if len(unique_keys) == 1:
+            unambiguous_counts[unique_keys[0]] += 1
 
     total = max(1, len(workflow_ids))
     result: list[dict[str, Any]] = []
     for (name, install_url), count in counts.most_common():
         ratio = count / total
-        confidence = 'HIGH' if ratio >= 0.8 else 'MEDIUM' if ratio >= 0.4 else 'LOW'
+        unambiguous_count = int(unambiguous_counts.get((name, install_url), 0))
+        unambiguous_ratio = unambiguous_count / total
+        if unambiguous_ratio >= 0.8:
+            confidence = 'HIGH'
+        elif unambiguous_ratio >= 0.4 or ratio >= 0.8:
+            confidence = 'MEDIUM'
+        else:
+            confidence = 'LOW'
+        reason = (
+            f'{count}/{len(workflow_ids)} 个受影响 Workflow 的 Manifest 声明了该 Custom Node 包；'
+            f'其中 {unambiguous_count} 个 Workflow 只声明这一个 Custom Node 包。'
+        )
         result.append({
             'packageName': name,
             'installUrl': install_url or None,
             'evidenceCount': count,
+            'unambiguousEvidenceCount': unambiguous_count,
             'workflowCount': len(workflow_ids),
             'coverage': round(ratio * 100, 1),
+            'unambiguousCoverage': round(unambiguous_ratio * 100, 1),
             'confidence': confidence,
             'workflowIds': evidence[(name, install_url)][:50],
-            'reason': f'{count}/{len(workflow_ids)} 个受影响 Workflow 的 Manifest 声明了该 Custom Node 包。',
+            'reason': reason,
         })
     return result
 
@@ -212,6 +228,7 @@ def build_remediation_guides(
         'rules': [
             '建议完全来自现有 Manifest、Dependency Inventory 与 Readiness 数据。',
             'Readiness 只统计与 Runtime Converter 一致的执行依赖；Note/MarkdownNote 等非执行节点不再阻塞。',
+            'Custom Node 包名只是 Manifest 证据；多个包同时声明时不会当成确定归属。',
             '不根据节点名称猜 GitHub 仓库，不根据模型文件名猜下载站点。',
             '没有来源证据时必须保持 MANUAL_REVIEW。',
             '所有操作均为人工执行；本阶段没有安装/下载动作。',
