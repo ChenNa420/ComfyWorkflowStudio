@@ -114,6 +114,9 @@ def _candidate_model_urls(blocker_name: str, workflow_ids: list[str], manifests:
 
 
 def _workflow_ids(blocker: dict[str, Any]) -> list[str]:
+    explicit = [str(value).strip() for value in blocker.get('workflowIds') or [] if str(value).strip()]
+    if explicit:
+        return list(dict.fromkeys(explicit))
     ids: list[str] = []
     for item in blocker.get('workflows') or []:
         workflow_id = str(item.get('id') or '').strip()
