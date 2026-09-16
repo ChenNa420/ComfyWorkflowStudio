@@ -8,7 +8,8 @@ from typing import Any
 from backend.db import Database
 from backend.models import WorkflowManifest
 from backend.workflow.knowledge import manifest_completeness
-from backend.workflow.manifest import discover_manifests, save_manifest
+from backend.workflow.manifest import discover_manifests
+from backend.workflow.manifest_history import save_manifest_with_history
 
 CATEGORY_DESCRIPTION = {
     'image-to-video': '使用一张或多张图片作为条件生成视频。',
@@ -128,6 +129,7 @@ def manifest_review_item(path: Path, manifest: WorkflowManifest) -> dict[str, An
             '输入语义只接受 analysisConfidence >= 0.80 的分析结果',
             '不自动填写 notRecommendedFor',
             '不修改 original.json',
+            '每次写入 Manifest 前后都会留下可回滚版本',
         ],
     }
 
@@ -136,6 +138,28 @@ def manifest_review_queue() -> list[dict[str, Any]]:
     items = [manifest_review_item(path, manifest) for path, manifest in discover_manifests()]
     items.sort(key=lambda item: (item['completeness']['score'], -item['proposalCount'], item['name'].casefold()))
     return items
+
+
+def manifest_review_batch(workflow_ids: list[str]) -> dict[str, Any]:
+    wanted = {item for item in workflow_ids if item}
+    queue = manifest_review_queue()
+    items = [item for item in queue if item['workflowId'] in wanted]
+    found_ids = {item['workflowId'] for item in items}
+    missing = sorted(wanted - found_ids)
+    return {
+        'requested': len(wanted),
+        'found': len(items),
+        'missingWorkflowIds': missing,
+        'proposalCount': sum(int(item['proposalCount']) for item in items),
+        'averageCompleteness': round(sum(item['completeness']['score'] for item in items) / len(items), 1) if items else 0.0,
+        'items': items,
+        'writeMode': False,
+        'rules': [
+            '批量工作台只负责人工预览，不提供一键批量写入',
+            '真正写入仍必须逐 Workflow 显式确认',
+            '所有写入均生成 Manifest 版本历史，可回滚',
+        ],
+    }
 
 
 def _set_nested(payload: dict[str, Any], field: str, value: Any) -> None:
@@ -152,7 +176,7 @@ def apply_safe_manifest_review(db: Database, workflow_id: str) -> dict[str, Any]
             continue
         review = manifest_review_item(path, manifest)
         if not review['proposals']:
-            return {'workflowId': workflow_id, 'applied': 0, 'manifest': manifest.model_dump(mode='json'), 'review': review}
+            return {'workflowId': workflow_id, 'applied': 0, 'manifest': manifest.model_dump(mode='json'), 'review': review, 'versions': None}
 
         payload = deepcopy(manifest.model_dump(mode='json'))
         input_by_key = {str(item.get('key')): item for item in payload.get('inputs') or []}
@@ -177,27 +201,20 @@ def apply_safe_manifest_review(db: Database, workflow_id: str) -> dict[str, Any]
             applied += 1
 
         updated = WorkflowManifest.model_validate(payload)
-        save_manifest(updated, path)
-        with db.connect() as conn:
-            conn.execute(
-                """
-                UPDATE workflows
-                SET name=?, category=?, description=?, difficulty=?, manifest_json=?, updated_at=datetime('now')
-                WHERE id=?
-                """,
-                (
-                    updated.name,
-                    updated.category,
-                    updated.description,
-                    updated.difficulty,
-                    json.dumps(updated.model_dump(mode='json'), ensure_ascii=False),
-                    workflow_id,
-                ),
-            )
+        versions = save_manifest_with_history(
+            db,
+            path,
+            manifest,
+            updated,
+            action='safe-review',
+            note=f'显式应用 {applied} 项安全 Manifest 补全。',
+            metadata={'proposalCount': applied},
+        )
         return {
             'workflowId': workflow_id,
             'applied': applied,
             'manifest': updated.model_dump(mode='json'),
             'review': manifest_review_item(path, updated),
+            'versions': versions,
         }
     return None
