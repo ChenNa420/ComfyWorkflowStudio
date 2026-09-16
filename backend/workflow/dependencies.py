@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,9 @@ from backend.workflow.manifest import discover_manifests
 
 MODEL_EXTENSIONS = ('.safetensors', '.ckpt', '.pt', '.pth', '.onnx', '.gguf', '.bin')
 IGNORED_NODE_TYPES = {'PixaromaNote', 'PixaromaLabel'}
+_CACHE_TTL_SECONDS = 5.0
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict[str, Any] = {'key': None, 'at': 0.0, 'value': None}
 
 
 def _normalize(value: str) -> str:
@@ -67,7 +72,7 @@ def extract_comfy_model_options(object_info: dict[str, Any]) -> set[str]:
 def match_declared_model(name: str, available: set[str]) -> dict[str, Any]:
     declared = _normalize(name)
     declared_base = _basename(name)
-    exact = { _normalize(item): item for item in available }
+    exact = {_normalize(item): item for item in available}
     if declared in exact:
         return {'status': 'PRESENT', 'matched': exact[declared], 'match': 'exact'}
     basename_matches = [item for item in available if _basename(item) == declared_base]
@@ -105,12 +110,13 @@ def _workflow_dependency_item(
             **match,
         })
 
-    node_items = []
-    for node_type in node_types:
-        node_items.append({
+    node_items = [
+        {
             'nodeType': node_type,
             'status': 'PRESENT' if connected and node_type in object_info else 'MISSING' if connected else 'UNKNOWN',
-        })
+        }
+        for node_type in node_types
+    ]
 
     package_items = [
         {
@@ -155,8 +161,7 @@ def _workflow_dependency_item(
     }
 
 
-def dependency_inventory(*, client: ComfyClient | None = None) -> dict[str, Any]:
-    client = client or ComfyClient(comfy_url_from_env(), timeout=20)
+def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
     object_info: dict[str, Any] = {}
     connected = False
     error = None
@@ -231,6 +236,26 @@ def dependency_inventory(*, client: ComfyClient | None = None) -> dict[str, Any]
         'models': model_rows,
         'nodeTypes': node_rows,
     }
+
+
+def dependency_inventory(*, client: ComfyClient | None = None, force_refresh: bool = False) -> dict[str, Any]:
+    if client is not None:
+        return _build_dependency_inventory(client)
+
+    base_url = comfy_url_from_env()
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _CACHE.get('value')
+        if (
+            not force_refresh
+            and cached is not None
+            and _CACHE.get('key') == base_url
+            and now - float(_CACHE.get('at') or 0) < _CACHE_TTL_SECONDS
+        ):
+            return cached
+        value = _build_dependency_inventory(ComfyClient(base_url, timeout=20))
+        _CACHE.update({'key': base_url, 'at': time.monotonic(), 'value': value})
+        return value
 
 
 def dependency_workflow(inventory: dict[str, Any], workflow_id: str) -> dict[str, Any] | None:
