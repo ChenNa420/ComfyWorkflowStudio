@@ -60,6 +60,7 @@ def workflow_dependencies_router() -> APIRouter:
     @router.get('/models')
     def models(
         status: str | None = Query(default=None),
+        modelType: str | None = Query(default=None),
         q: str = Query(default=''),
         limit: int = Query(default=1000, ge=1, le=5000),
     ):
@@ -69,10 +70,17 @@ def workflow_dependencies_router() -> APIRouter:
         for item in inventory['models']:
             if status and item['status'] != status:
                 continue
-            if query and query not in item['name'].casefold():
+            if modelType and modelType not in (item.get('modelTypes') or [item.get('modelType')]):
+                continue
+            if query and query not in f"{item['name']} {item.get('modelType') or ''}".casefold():
                 continue
             items.append(item)
-        return {'connected': inventory['connected'], 'error': inventory['error'], 'items': items[:limit]}
+        return {
+            'connected': inventory['connected'],
+            'error': inventory['error'],
+            'modelTypes': inventory['summary'].get('modelTypes') or [],
+            'items': items[:limit],
+        }
 
     @router.get('/nodes')
     def nodes(
