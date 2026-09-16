@@ -224,11 +224,14 @@ def workflow_health(
     analysis: dict[str, Any],
     completeness: dict[str, Any],
     compatibility_status: str | None,
+    dependency_status: str | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     workflow_format = str(analysis.get('format') or '')
     if workflow_format == 'resource-json':
         return 'UNSUPPORTED', ['resource-json 不是可执行 Workflow']
+    if dependency_status == 'MISSING_DEPENDENCIES':
+        return 'MISSING_DEPENDENCIES', ['实时 ComfyUI 依赖盘点发现缺失模型或节点']
     if compatibility_status and 'MISSING' in compatibility_status.upper():
         return 'MISSING_DEPENDENCIES', [compatibility_status]
 
@@ -265,11 +268,12 @@ def build_workflow_card(
     *,
     db_row: dict[str, Any] | None = None,
     runtime_metrics: dict[str, Any] | None = None,
+    dependency_status: str | None = None,
 ) -> dict[str, Any]:
     analysis = _load_analysis(manifest_path)
     completeness = manifest_completeness(manifest, analysis)
     compatibility = str((db_row or {}).get('compatibility_status') or '') or None
-    health, health_reasons = workflow_health(manifest, analysis, completeness, compatibility)
+    health, health_reasons = workflow_health(manifest, analysis, completeness, compatibility, dependency_status)
     meta = CATEGORY_META.get(manifest.category, {'label': manifest.category or '未分类', 'group': 'other'})
     metrics = runtime_metrics or {
         'runs': 0,
@@ -292,6 +296,7 @@ def build_workflow_card(
         'traits': _traits(manifest, analysis),
         'health': health,
         'healthReasons': health_reasons,
+        'dependencyStatus': dependency_status,
         'compatibilityStatus': compatibility,
         'completeness': completeness,
         'runtimeMetrics': metrics,
@@ -325,11 +330,22 @@ def build_workflow_card(
     return card
 
 
-def workflow_knowledge_cards(db: Database) -> list[dict[str, Any]]:
+def workflow_knowledge_cards(
+    db: Database,
+    *,
+    dependency_statuses: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     rows = _db_workflow_rows(db)
     metrics = _runtime_metrics(db)
+    dependency_statuses = dependency_statuses or {}
     result = [
-        build_workflow_card(path, manifest, db_row=rows.get(manifest.workflowId), runtime_metrics=metrics.get(manifest.workflowId))
+        build_workflow_card(
+            path,
+            manifest,
+            db_row=rows.get(manifest.workflowId),
+            runtime_metrics=metrics.get(manifest.workflowId),
+            dependency_status=dependency_statuses.get(manifest.workflowId),
+        )
         for path, manifest in discover_manifests()
     ]
     for item in result:
@@ -346,13 +362,21 @@ def search_workflow_knowledge(
     health: str | None = None,
     family: str | None = None,
     limit: int = 500,
+    dependency_statuses: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     rows = _db_workflow_rows(db)
     metrics = _runtime_metrics(db)
+    dependency_statuses = dependency_statuses or {}
     cards: list[dict[str, Any]] = []
     query = q.strip().lower()
     for path, manifest in discover_manifests():
-        card = build_workflow_card(path, manifest, db_row=rows.get(manifest.workflowId), runtime_metrics=metrics.get(manifest.workflowId))
+        card = build_workflow_card(
+            path,
+            manifest,
+            db_row=rows.get(manifest.workflowId),
+            runtime_metrics=metrics.get(manifest.workflowId),
+            dependency_status=dependency_statuses.get(manifest.workflowId),
+        )
         if category and card['category'] != category:
             continue
         if capability and capability not in card['capabilities']:
@@ -369,12 +393,17 @@ def search_workflow_knowledge(
     return cards[: max(1, min(limit, 1000))]
 
 
-def workflow_knowledge_stats(db: Database) -> dict[str, Any]:
-    cards = workflow_knowledge_cards(db)
+def workflow_knowledge_stats(
+    db: Database,
+    *,
+    dependency_statuses: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    cards = workflow_knowledge_cards(db, dependency_statuses=dependency_statuses)
     health = Counter(item['health'] for item in cards)
     categories = Counter(item['category'] for item in cards)
     capabilities = Counter(cap for item in cards for cap in item['capabilities'])
     families = Counter(family for item in cards for family in item['families'])
+    dependency_states = Counter(item.get('dependencyStatus') or 'NOT_CHECKED' for item in cards)
     average = round(sum(item['completeness']['score'] for item in cards) / len(cards), 1) if cards else 0.0
     return {
         'total': len(cards),
@@ -384,6 +413,7 @@ def workflow_knowledge_stats(db: Database) -> dict[str, Any]:
         'missingDependencies': health.get('MISSING_DEPENDENCIES', 0),
         'unsupported': health.get('UNSUPPORTED', 0),
         'health': dict(sorted(health.items())),
+        'dependencyStates': dict(sorted(dependency_states.items())),
         'categories': [
             {
                 'key': key,
@@ -397,14 +427,25 @@ def workflow_knowledge_stats(db: Database) -> dict[str, Any]:
     }
 
 
-def workflow_knowledge_detail(db: Database, workflow_id: str) -> dict[str, Any] | None:
+def workflow_knowledge_detail(
+    db: Database,
+    workflow_id: str,
+    *,
+    dependency_status: str | None = None,
+) -> dict[str, Any] | None:
     rows = _db_workflow_rows(db)
     metrics = _runtime_metrics(db)
     for path, manifest in discover_manifests():
         if manifest.workflowId != workflow_id:
             continue
         analysis = _load_analysis(path)
-        card = build_workflow_card(path, manifest, db_row=rows.get(workflow_id), runtime_metrics=metrics.get(workflow_id))
+        card = build_workflow_card(
+            path,
+            manifest,
+            db_row=rows.get(workflow_id),
+            runtime_metrics=metrics.get(workflow_id),
+            dependency_status=dependency_status,
+        )
         card.pop('_search', None)
         return {
             **card,
