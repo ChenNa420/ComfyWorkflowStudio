@@ -70,9 +70,15 @@ def record_manifest_version(
     directory = _history_dir(manifest_path)
     directory.mkdir(parents=True, exist_ok=True)
     payload = _snapshot_payload(manifest, action=action, note=note, metadata=metadata)
-    version_id = f"{_stamp()}-{payload['manifestHash'][:10]}"
-    payload['versionId'] = version_id
+    base_id = f"{_stamp()}-{payload['manifestHash'][:10]}"
+    version_id = base_id
     target = directory / f'{version_id}.json'
+    counter = 1
+    while target.exists():
+        version_id = f'{base_id}-{counter}'
+        target = directory / f'{version_id}.json'
+        counter += 1
+    payload['versionId'] = version_id
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     return {key: value for key, value in payload.items() if key != 'manifest'}
 

@@ -22,7 +22,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncHash))
 </script>
 
 <template>
-  <AppPhase1D />
+  <AppPhase1D :suppress-workflow-page="true" />
 
   <div v-if="page === 'workflows'" class="adapter-overlay knowledge-overlay">
     <section class="panel adapter-overlay-card knowledge-overlay-card">

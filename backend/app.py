@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.bindings import bindings_router
+from backend.comic_story_api import comic_story_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.comfy.runtime import create_task as create_generation_task
 from backend.db import Database, ROOT
@@ -55,7 +56,7 @@ def create_app() -> FastAPI:
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
             'phase': '1H',
-            'subphase': '1H-1',
+            'subphase': '1H-2',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -267,6 +268,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail='output_file_missing')
         return FileResponse(path, filename=path.name if download else None, content_disposition_type='attachment' if download else 'inline')
 
+    app.include_router(comic_story_router())
     app.include_router(workflow_knowledge_router(db))
     app.include_router(workflow_dependencies_router())
     app.include_router(manifest_review_router(db))

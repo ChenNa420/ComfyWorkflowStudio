@@ -15,6 +15,7 @@ from backend.workflow.manifest import load_manifest, save_manifest
 from backend.workflow.manifest_history import (
     list_manifest_versions,
     rollback_manifest_version,
+    record_manifest_version,
     save_manifest_with_history,
 )
 from backend.workflow.manifest_review import manifest_review_batch
@@ -84,6 +85,13 @@ class Phase1F3GovernanceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_manifest_history_ids_remain_unique_when_clock_stamp_collides(self):
+        with patch('backend.workflow.manifest_history._stamp', return_value='20260916T120000000000Z'):
+            first = record_manifest_version(self.manifest_path, self.manifest, action='baseline')
+            second = record_manifest_version(self.manifest_path, self.manifest, action='same-stamp')
+        self.assertNotEqual(first['versionId'], second['versionId'])
+        self.assertEqual(len(list_manifest_versions(self.manifest_path)), 2)
 
     def test_model_catalog_classifies_checkpoint_vae_controlnet_and_lora(self):
         object_info = {
