@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
+from backend.comfy.converter import NON_EXECUTION_NODE_TYPES
 from backend.models import WorkflowManifest
 from backend.workflow.manifest import discover_manifests
 
 MODEL_EXTENSIONS = ('.safetensors', '.ckpt', '.pt', '.pth', '.onnx', '.gguf', '.bin')
-IGNORED_NODE_TYPES = {'PixaromaNote', 'PixaromaLabel'}
 _CACHE_TTL_SECONDS = 5.0
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, Any] = {'key': None, 'at': 0.0, 'value': None}
@@ -35,6 +35,17 @@ def _load_analysis(manifest_path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _load_original(manifest_path: Path) -> dict[str, Any] | None:
+    original_path = manifest_path.parent / 'original.json'
+    if not original_path.is_file():
+        return None
+    try:
+        value = json.loads(original_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _walk_strings(value: Any):
@@ -189,6 +200,77 @@ def match_declared_model(
     }
 
 
+def _has_output_links(node: dict[str, Any]) -> bool:
+    for output in node.get('outputs') or []:
+        if isinstance(output, dict) and output.get('links'):
+            return True
+    return False
+
+
+def _node_mode(node: dict[str, Any]) -> int:
+    try:
+        return int(node.get('mode') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def execution_node_types(
+    manifest_path: Path,
+    analysis: dict[str, Any],
+    *,
+    connected: bool,
+    object_info: dict[str, Any],
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Return node types that can actually block runtime conversion.
+
+    This intentionally mirrors `ui_workflow_to_prompt` safety semantics:
+    known note/label nodes and `mode=2` nodes are not executable, while an
+    unknown UI node with no downstream output links is treated as decoration
+    rather than a missing runtime dependency.
+    """
+    original = _load_original(manifest_path)
+    required: list[str] = []
+    ignored: list[dict[str, str]] = []
+
+    if isinstance(original, dict) and isinstance(original.get('nodes'), list):
+        for raw in original.get('nodes') or []:
+            if not isinstance(raw, dict):
+                continue
+            node_type = str(raw.get('type') or '').strip()
+            if not node_type:
+                continue
+            if node_type in NON_EXECUTION_NODE_TYPES:
+                ignored.append({'nodeType': node_type, 'reason': 'known-non-execution'})
+                continue
+            if _node_mode(raw) == 2:
+                ignored.append({'nodeType': node_type, 'reason': 'mode-never'})
+                continue
+            if connected and node_type not in object_info and not _has_output_links(raw):
+                ignored.append({'nodeType': node_type, 'reason': 'unconnected-ui-only'})
+                continue
+            required.append(node_type)
+    elif isinstance(original, dict) and original and all(isinstance(value, dict) for value in original.values()):
+        for value in original.values():
+            node_type = str(value.get('class_type') or '').strip()
+            if not node_type:
+                continue
+            if node_type in NON_EXECUTION_NODE_TYPES:
+                ignored.append({'nodeType': node_type, 'reason': 'known-non-execution'})
+                continue
+            required.append(node_type)
+    else:
+        for value in analysis.get('nodeTypes') or []:
+            node_type = str(value).strip()
+            if not node_type:
+                continue
+            if node_type in NON_EXECUTION_NODE_TYPES:
+                ignored.append({'nodeType': node_type, 'reason': 'known-non-execution'})
+                continue
+            required.append(node_type)
+
+    return list(dict.fromkeys(required)), ignored
+
+
 def _workflow_dependency_item(
     manifest_path: Path,
     manifest: WorkflowManifest,
@@ -199,10 +281,12 @@ def _workflow_dependency_item(
     model_catalog: list[dict[str, str]],
 ) -> dict[str, Any]:
     analysis = _load_analysis(manifest_path)
-    node_types = [
-        str(value) for value in (analysis.get('nodeTypes') or [])
-        if str(value) and str(value) not in IGNORED_NODE_TYPES
-    ]
+    node_types, ignored_node_types = execution_node_types(
+        manifest_path,
+        analysis,
+        connected=connected,
+        object_info=object_info,
+    )
 
     model_items: list[dict[str, Any]] = []
     for dependency in manifest.dependencies.models:
@@ -228,6 +312,7 @@ def _workflow_dependency_item(
         {
             'nodeType': node_type,
             'status': 'PRESENT' if connected and node_type in object_info else 'MISSING' if connected else 'UNKNOWN',
+            'executionRequired': True,
         }
         for node_type in node_types
     ]
@@ -238,7 +323,7 @@ def _workflow_dependency_item(
             'required': item.required,
             'installUrl': item.installUrl,
             'status': 'DECLARED',
-            'verification': 'node-types',
+            'verification': 'execution-node-types',
         }
         for item in manifest.dependencies.customNodes
     ]
@@ -264,12 +349,14 @@ def _workflow_dependency_item(
         'status': status,
         'models': model_items,
         'nodeTypes': node_items,
+        'ignoredNodeTypes': ignored_node_types,
         'customNodePackages': package_items,
         'counts': {
             'models': len(model_items),
             'missingModels': len(missing_models),
             'nodeTypes': len(node_items),
             'missingNodeTypes': len(missing_nodes),
+            'ignoredNodeTypes': len(ignored_node_types),
             'customNodePackages': len(package_items),
         },
     }
@@ -324,9 +411,12 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
             entry['workflows'].append({'id': workflow['workflowId'], 'name': workflow['name']})
 
     node_usage: dict[str, list[dict[str, str]]] = defaultdict(list)
+    ignored_usage: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for workflow in workflows:
         for item in workflow['nodeTypes']:
             node_usage[item['nodeType']].append({'id': workflow['workflowId'], 'name': workflow['name']})
+        for item in workflow.get('ignoredNodeTypes') or []:
+            ignored_usage[(item['nodeType'], item['reason'])].append({'id': workflow['workflowId'], 'name': workflow['name']})
 
     model_rows = sorted(model_usage.values(), key=lambda item: (item['status'] != 'MISSING', item['modelType'], item['name'].casefold()))
     node_rows = [
@@ -338,6 +428,16 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
         for node_type, usage in node_usage.items()
     ]
     node_rows.sort(key=lambda item: (item['status'] != 'MISSING', item['nodeType'].casefold()))
+    ignored_rows = [
+        {
+            'nodeType': node_type,
+            'reason': reason,
+            'workflows': usage,
+            'workflowCount': len(usage),
+        }
+        for (node_type, reason), usage in ignored_usage.items()
+    ]
+    ignored_rows.sort(key=lambda item: (-item['workflowCount'], item['nodeType'].casefold()))
 
     status_counts = Counter(item['status'] for item in workflows)
     type_counts = Counter(
@@ -359,11 +459,14 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
             'missingModels': sum(1 for item in model_rows if item['status'] == 'MISSING'),
             'requiredNodeTypes': len(node_rows),
             'missingNodeTypes': sum(1 for item in node_rows if item['status'] == 'MISSING'),
+            'ignoredNodeTypes': len({item['nodeType'] for item in ignored_rows}),
+            'ignoredNodeOccurrences': sum(item['workflowCount'] for item in ignored_rows),
             'modelTypes': [{'key': key, 'count': count} for key, count in type_counts.most_common()],
         },
         'workflows': workflows,
         'models': model_rows,
         'nodeTypes': node_rows,
+        'ignoredNodeTypes': ignored_rows,
         'modelCatalog': model_catalog,
     }
 
