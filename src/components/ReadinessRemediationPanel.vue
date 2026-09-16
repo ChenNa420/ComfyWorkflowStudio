@@ -50,6 +50,7 @@ type Plan = {
 type PackageCandidate = {
   packageName: string
   installUrl?: string | null
+  urlSafe: boolean
   evidenceCount: number
   workflowCount: number
   coverage: number
@@ -71,7 +72,7 @@ type Guide = {
   evidence: string[]
   safety: string[]
   sourceUrl?: string
-  sourceUrls?: Array<{ url: string; evidenceCount: number }>
+  sourceUrls?: Array<{ url: string; urlSafe: boolean; evidenceCount: number }>
   declaredPaths?: Array<{ declaredPath: string; evidenceCount: number }>
   candidatePackages?: PackageCandidate[]
 }
@@ -255,7 +256,8 @@ onMounted(() => void load(true))
             <h4>Manifest Custom Node 候选</h4>
             <div v-for="candidate in item.candidatePackages.slice(0,4)" :key="`${candidate.packageName}-${candidate.installUrl}`" class="evidence-row">
               <div><b>{{ candidate.packageName }}</b><span>{{ candidate.evidenceCount }}/{{ candidate.workflowCount }} 个 Workflow 声明 · 覆盖 {{ candidate.coverage }}%</span></div>
-              <a v-if="candidate.installUrl" :href="candidate.installUrl" target="_blank" rel="noreferrer">核对来源 <ExternalLink :size="11"/></a>
+              <a v-if="candidate.installUrl && candidate.urlSafe" :href="candidate.installUrl" target="_blank" rel="noreferrer">核对来源 <ExternalLink :size="11"/></a>
+              <code v-else-if="candidate.installUrl">{{ candidate.installUrl }}</code>
             </div>
           </div>
 
@@ -266,7 +268,10 @@ onMounted(() => void load(true))
 
           <div v-if="item.sourceUrls?.length" class="evidence-box">
             <h4>Manifest 声明来源</h4>
-            <a v-for="candidate in item.sourceUrls.slice(0,4)" :key="candidate.url" :href="candidate.url" target="_blank" rel="noreferrer">{{ candidate.url }} <ExternalLink :size="11"/></a>
+            <template v-for="candidate in item.sourceUrls.slice(0,4)" :key="candidate.url">
+              <a v-if="candidate.urlSafe" :href="candidate.url" target="_blank" rel="noreferrer">{{ candidate.url }} <ExternalLink :size="11"/></a>
+              <code v-else>{{ candidate.url }}</code>
+            </template>
           </div>
 
           <div class="safety-line"><span v-for="rule in item.safety.slice(0,3)" :key="rule"><CheckCircle2 :size="11"/>{{ rule }}</span></div>
