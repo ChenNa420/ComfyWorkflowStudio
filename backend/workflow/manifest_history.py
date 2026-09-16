@@ -180,7 +180,6 @@ def manifest_history(workflow_id: str) -> dict[str, Any] | None:
     if found is None:
         return None
     path, manifest = found
-    ensure_manifest_baseline(path, manifest)
     return {
         'workflowId': workflow_id,
         'currentHash': _manifest_hash(manifest),
@@ -192,8 +191,7 @@ def manifest_history_version(workflow_id: str, version_id: str) -> dict[str, Any
     found = _find_manifest(workflow_id)
     if found is None:
         return None
-    path, manifest = found
-    ensure_manifest_baseline(path, manifest)
+    path, _ = found
     return load_manifest_version(path, version_id)
 
 
