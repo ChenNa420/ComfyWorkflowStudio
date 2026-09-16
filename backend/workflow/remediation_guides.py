@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from backend.models import WorkflowManifest
 from backend.workflow.dependencies import dependency_inventory
@@ -12,6 +13,16 @@ from backend.workflow.readiness import build_readiness_plan
 
 def _manifest_index() -> dict[str, tuple[Path, WorkflowManifest]]:
     return {manifest.workflowId: (path, manifest) for path, manifest in discover_manifests()}
+
+
+def _safe_http_url(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
 
 
 def _candidate_node_packages(workflow_ids: list[str], manifests: dict[str, tuple[Path, WorkflowManifest]]) -> list[dict[str, Any]]:
@@ -50,6 +61,7 @@ def _candidate_node_packages(workflow_ids: list[str], manifests: dict[str, tuple
         result.append({
             'packageName': name,
             'installUrl': install_url or None,
+            'urlSafe': _safe_http_url(install_url),
             'evidenceCount': count,
             'unambiguousEvidenceCount': unambiguous_count,
             'workflowCount': len(workflow_ids),
@@ -105,6 +117,7 @@ def _candidate_model_urls(blocker_name: str, workflow_ids: list[str], manifests:
     return [
         {
             'url': url,
+            'urlSafe': _safe_http_url(url),
             'evidenceCount': count,
             'workflowIds': workflow_map[url][:50],
             'source': 'manifest',
@@ -190,7 +203,7 @@ def build_remediation_guides(
                 guide['confidence'] = top['confidence']
                 guide['action'] = 'VERIFY_CUSTOM_NODE_PACKAGE'
                 guide['evidence'].append(top['reason'])
-                if top.get('installUrl'):
+                if top.get('installUrl') and top.get('urlSafe'):
                     guide['sourceUrl'] = top['installUrl']
             else:
                 guide['evidence'].append('受影响 Workflow 的 Manifest 未声明可可靠关联的 Custom Node 包。')
@@ -203,10 +216,13 @@ def build_remediation_guides(
                 guide['action'] = 'VERIFY_MODEL_FILE'
                 guide['confidence'] = 'HIGH' if len(paths) == 1 else 'MEDIUM'
                 guide['evidence'].append(f'Manifest 中存在 {len(paths)} 个声明路径候选。')
-            if urls:
+            safe_urls = [item for item in urls if item.get('urlSafe')]
+            if safe_urls:
                 guide['action'] = 'VERIFY_MODEL_SOURCE'
-                guide['confidence'] = 'HIGH' if len(urls) == 1 else 'MEDIUM'
-                guide['evidence'].append(f'Manifest 中存在 {len(urls)} 个下载来源候选。')
+                guide['confidence'] = 'HIGH' if len(safe_urls) == 1 else 'MEDIUM'
+                guide['evidence'].append(f'Manifest 中存在 {len(safe_urls)} 个可打开的 HTTP(S) 来源候选。')
+            elif urls:
+                guide['evidence'].append('Manifest 声明了非 HTTP(S) 来源，只作为文本证据展示。')
             if not paths and not urls:
                 guide['evidence'].append('Manifest 未提供路径或来源 URL，需要人工确认模型来源。')
 
@@ -222,7 +238,11 @@ def build_remediation_guides(
         'summary': {
             'guides': len(selected),
             'withHighConfidenceAction': sum(1 for item in selected if item['confidence'] == 'HIGH'),
-            'withSourceUrl': sum(1 for item in selected if item.get('sourceUrl') or item.get('sourceUrls')),
+            'withSourceUrl': sum(
+                1
+                for item in selected
+                if item.get('sourceUrl') or any(url.get('urlSafe') for url in item.get('sourceUrls') or [])
+            ),
             'withDeclaredPath': sum(1 for item in selected if item.get('declaredPaths')),
             'ignoredNodeTypes': int(inventory_summary.get('ignoredNodeTypes') or 0),
             'ignoredNodeOccurrences': int(inventory_summary.get('ignoredNodeOccurrences') or 0),
@@ -233,6 +253,7 @@ def build_remediation_guides(
             'Readiness 只统计与 Runtime Converter 一致的执行依赖；Note/MarkdownNote 等非执行节点不再阻塞。',
             'Custom Node 包名只是 Manifest 证据；多个包同时声明时不会当成确定归属。',
             '不根据节点名称猜 GitHub 仓库，不根据模型文件名猜下载站点。',
+            '只有 HTTP(S) Manifest URL 会作为可点击来源；其他值只显示为文本证据。',
             '没有来源证据时必须保持 MANUAL_REVIEW。',
             '所有操作均为人工执行；本阶段没有安装/下载动作。',
         ],
