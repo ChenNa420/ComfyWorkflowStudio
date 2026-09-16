@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { ArrowLeft, WandSparkles } from 'lucide-vue-next'
 import AppPhase1D from './AppPhase1D.vue'
+import DependencyCenterPanel from './components/DependencyCenterPanel.vue'
 import WorkflowAdapterPanel from './components/WorkflowAdapterPanel.vue'
 import WorkflowKnowledgePanel from './components/WorkflowKnowledgePanel.vue'
 
@@ -25,6 +26,12 @@ onUnmounted(() => window.removeEventListener('hashchange', syncHash))
   <div v-if="page === 'workflows'" class="adapter-overlay knowledge-overlay">
     <section class="panel adapter-overlay-card knowledge-overlay-card">
       <WorkflowKnowledgePanel />
+    </section>
+  </div>
+
+  <div v-if="page === 'dependencies'" class="adapter-overlay knowledge-overlay">
+    <section class="panel adapter-overlay-card knowledge-overlay-card">
+      <DependencyCenterPanel />
     </section>
   </div>
 
