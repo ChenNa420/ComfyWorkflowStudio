@@ -1,231 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { CircleCheck, Film, Image, Upload } from 'lucide-vue-next'
-
-type WorkflowSummary = { id: string; name: string; category: string; description: string }
-type ManifestInput = {
-  key: string
-  label: string
-  type: string
-  required: boolean
-  purpose?: string | null
-  description?: string
-  help?: string
-  accept?: string[]
-}
-type ManifestParameter = {
-  key: string
-  label: string
-  type: string
-  default?: unknown
-  min?: number | null
-  max?: number | null
-  step?: number | null
-  unit?: string | null
-  options?: unknown[]
-  description?: string
-}
-type Manifest = {
-  workflowId: string
-  name: string
-  description: string
-  category: string
-  inputs: ManifestInput[]
-  parameters: ManifestParameter[]
-  runtime?: { executionMode?: string; retryUnknown?: boolean; preserveOriginalWorkflow?: boolean }
-}
-type FormValue = string | number | boolean
-
-const workflows = ref<WorkflowSummary[]>([])
-const selectedId = ref('')
-const manifest = ref<Manifest | null>(null)
-const values = ref<Record<string, FormValue>>({})
-const parameters = ref<Record<string, FormValue>>({})
-const uploadedNames = ref<Record<string, string>>({})
-const loading = ref(false)
-const submitting = ref(false)
-const error = ref('')
-const taskResult = ref<{ taskId: string; status: string } | null>(null)
-const compatibility = ref<{ status?: string; missingNodes?: string[] } | null>(null)
-
-const selectedWorkflow = computed(() => workflows.value.find((item) => item.id === selectedId.value))
-
-async function loadWorkflows() {
-  const response = await fetch('/api/workflows')
-  if (!response.ok) throw new Error(`工作流列表 HTTP ${response.status}`)
-  workflows.value = await response.json()
-  const saved = sessionStorage.getItem('cws-selected-workflow')
-  selectedId.value = saved && workflows.value.some((item) => item.id === saved) ? saved : workflows.value[0]?.id || ''
-}
-
-async function loadManifest(id: string) {
-  if (!id) {
-    manifest.value = null
-    return
-  }
-  loading.value = true
-  error.value = ''
-  taskResult.value = null
-  try {
-    const [manifestResponse, compatibilityResponse] = await Promise.all([
-      fetch(`/api/workflows/${encodeURIComponent(id)}/manifest`),
-      fetch(`/api/workflows/${encodeURIComponent(id)}/compatibility`),
-    ])
-    if (!manifestResponse.ok) throw new Error(`Manifest HTTP ${manifestResponse.status}`)
-    manifest.value = await manifestResponse.json()
-    compatibility.value = compatibilityResponse.ok ? await compatibilityResponse.json() : null
-    values.value = {}
-    parameters.value = {}
-    uploadedNames.value = {}
-    for (const item of manifest.value?.inputs || []) {
-      if (item.type === 'boolean') values.value[item.key] = false
-      else values.value[item.key] = ''
-    }
-    for (const item of manifest.value?.parameters || []) {
-      const value = item.default
-      parameters.value[item.key] = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? value : ''
-    }
-    sessionStorage.setItem('cws-selected-workflow', id)
-  } catch (value) {
-    error.value = value instanceof Error ? value.message : '读取 Manifest 失败'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function uploadMaterial(event: Event, key: string) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  error.value = ''
-  try {
-    const body = new FormData()
-    body.append('file', file)
-    const response = await fetch('/api/materials', { method: 'POST', body })
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload?.detail || `上传 HTTP ${response.status}`)
-    values.value[key] = payload.filePath
-    uploadedNames.value[key] = payload.name
-  } catch (value) {
-    error.value = value instanceof Error ? value.message : '素材上传失败'
-  }
-}
-
-function isFileInput(type: string) {
-  return ['image', 'video', 'audio'].includes(type)
-}
-
-function setTextValue(event: Event, key: string) {
-  values.value[key] = (event.target as HTMLTextAreaElement).value
-}
-
-async function submitTask() {
-  if (!manifest.value) return
-  error.value = ''
-  taskResult.value = null
-  for (const item of manifest.value.inputs) {
-    if (item.required && !values.value[item.key]) {
-      error.value = `请填写：${item.label}`
-      return
-    }
-  }
-  submitting.value = true
-  try {
-    const response = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workflowId: manifest.value.workflowId,
-        clientApp: 'ComfyWorkflowStudio',
-        inputs: values.value,
-        parameters: parameters.value,
-      }),
-    })
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload?.detail || `任务 HTTP ${response.status}`)
-    taskResult.value = payload
-    window.dispatchEvent(new CustomEvent('generation-task-created', { detail: payload }))
-  } catch (value) {
-    error.value = value instanceof Error ? value.message : '创建任务失败'
-  } finally {
-    submitting.value = false
-  }
-}
-
-watch(selectedId, (id) => loadManifest(id))
-
-onMounted(async () => {
-  try {
-    await loadWorkflows()
-  } catch (value) {
-    error.value = value instanceof Error ? value.message : '读取工作流失败'
-  }
-})
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { Download, Film, Image, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
+type Field={key:string;label:string;type:string;required?:boolean;purpose?:string|null;description?:string;help?:string;accept?:string[];default?:unknown;min?:number|null;max?:number|null;step?:number|null;unit?:string|null;options?:unknown[]}
+type Manifest={workflowId:string;name:string;description:string;category:string;inputs:Field[];parameters:Field[];runtime?:Record<string,unknown>}
+type Workflow={id:string;name:string;category:string;description:string};type Output={id:string;type:string;file_path:string};type Run={id?:string;taskId?:string;status:string;prompt_id?:string;error?:string;created_at?:string;durationSeconds?:number;outputs?:Output[]};type Value=any
+const workflows=ref<Workflow[]>([]),selectedId=ref(''),manifest=ref<Manifest|null>(null),values=ref<Record<string,Value>>({}),parameters=ref<Record<string,Value>>({}),names=ref<Record<string,string>>({}),previews=ref<Record<string,string>>({}),loading=ref(false),submitting=ref(false),error=ref(''),current=ref<Run|null>(null),recent=ref<Run[]>([]);let timer:number|undefined
+const selected=computed(()=>workflows.value.find(x=>x.id===selectedId.value));const terminal=(s:string)=>['SUCCEEDED','FAILED','UNKNOWN','NEEDS_REVIEW'].includes(s)
+async function jsonFetch(url:string,init?:RequestInit){const r=await fetch(url,init),p=await r.json();if(!r.ok){const d=p?.detail;throw new Error(d?.message||d?.code||d||`HTTP ${r.status}`)}return p}
+async function loadWorkflows(){const [all,cert]=await Promise.all([jsonFetch('/api/workflows'),jsonFetch('/api/readiness/preflight?certifiedOnly=true')]);const ids=new Set((Array.isArray(cert)?cert:cert.items||[]).filter((x:any)=>x.status==='CERTIFIED').map((x:any)=>x.workflowId));workflows.value=all.filter((x:Workflow)=>ids.has(x.id));const saved=sessionStorage.getItem('cws-selected-workflow');selectedId.value=saved&&workflows.value.some(x=>x.id===saved)?saved:workflows.value[0]?.id||''}
+function clearPreviews(){Object.values(previews.value).forEach(URL.revokeObjectURL);previews.value={}}
+async function loadSchema(id:string){if(!id){manifest.value=null;return}loading.value=true;error.value='';current.value=null;clearPreviews();try{const s=await jsonFetch(`/api/workflows/${encodeURIComponent(id)}/run-schema`);manifest.value=s.manifest;values.value={};parameters.value={};names.value={};for(const f of manifest.value?.inputs||[])values.value[f.key]=f.type==='boolean'?false:'';for(const f of manifest.value?.parameters||[])parameters.value[f.key]=(['string','number','boolean'].includes(typeof f.default)?f.default:'') as Value;sessionStorage.setItem('cws-selected-workflow',id);await loadRecent()}catch(e){error.value=e instanceof Error?e.message:'读取生产表单失败'}finally{loading.value=false}}
+async function loadRecent(){if(selectedId.value)recent.value=await jsonFetch(`/api/workflows/${encodeURIComponent(selectedId.value)}/runs?limit=8`)}
+const fileField=(t:string)=>['image','video','audio'].includes(t)
+async function upload(e:Event,f:Field){const input=e.target as HTMLInputElement,file=input.files?.[0];if(!file)return;error.value='';try{const body=new FormData();body.append('file',file);const p=await jsonFetch('/api/materials',{method:'POST',body});values.value[f.key]=p.filePath;names.value[f.key]=p.name;if(previews.value[f.key])URL.revokeObjectURL(previews.value[f.key]);previews.value[f.key]=URL.createObjectURL(file)}catch(x){error.value=x instanceof Error?x.message:'上传失败'}}
+function removeFile(k:string){values.value[k]='';names.value[k]='';if(previews.value[k])URL.revokeObjectURL(previews.value[k]);delete previews.value[k]}
+function randomSeed(k:string){parameters.value[k]=crypto.getRandomValues(new Uint32Array(1))[0]}
+function validate(){for(const f of manifest.value?.inputs||[])if(f.required&&(values.value[f.key]===''||values.value[f.key]===undefined)){error.value=`请填写：${f.label}`;return false}return true}
+async function poll(id:string){clearTimeout(timer);try{current.value=await jsonFetch(`/api/workflows/runs/${id}`);if(current.value&&!terminal(current.value.status))timer=window.setTimeout(()=>poll(id),2000);else await loadRecent()}catch(e){error.value=e instanceof Error?e.message:'状态读取失败'}}
+async function submit(){if(!manifest.value||!validate()||submitting.value)return;submitting.value=true;error.value='';try{const p=await jsonFetch(`/api/workflows/${encodeURIComponent(manifest.value.workflowId)}/runs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workflowId:manifest.value.workflowId,clientApp:'ComfyWorkflowStudio',inputs:values.value,parameters:parameters.value})});current.value=p;await poll(p.taskId);window.dispatchEvent(new CustomEvent('generation-task-created',{detail:p}))}catch(e){error.value=e instanceof Error?e.message:'创建失败'}finally{submitting.value=false}}
+async function rerun(id:string){if(submitting.value)return;submitting.value=true;error.value='';try{const p=await jsonFetch(`/api/workflows/runs/${id}/rerun`,{method:'POST'});await poll(p.taskId)}catch(e){error.value=e instanceof Error?e.message:'重跑失败'}finally{submitting.value=false}}
+const basename=(p:string)=>p.replaceAll('\\','/').split('/').pop()||p
+watch(selectedId,loadSchema);onMounted(()=>loadWorkflows().catch(e=>error.value=e.message));onUnmounted(()=>{clearTimeout(timer);clearPreviews()})
 </script>
-
-<template>
-  <div class="dynamic-task-form">
-    <div class="workflow-selected task-workflow-select">
-      <div class="workflow-cover"><Film :size="28" /></div>
-      <div>
-        <b>{{ selectedWorkflow?.name || '请选择工作流' }}</b>
-        <p>{{ selectedWorkflow?.description || '先从工作流库导入或选择一个 Workflow。' }}</p>
-      </div>
-      <select v-model="selectedId" class="workflow-select">
-        <option v-for="item in workflows" :key="item.id" :value="item.id">{{ item.name }}</option>
-      </select>
-    </div>
-
-    <div v-if="loading" class="notice">正在读取 Workflow Manifest...</div>
-    <div v-else-if="!manifest" class="notice">当前没有可用工作流。请先进入“导入工作流”页面导入 JSON 或 ZIP。</div>
-
-    <template v-else>
-      <div class="manifest-summary">
-        <span class="badge">{{ manifest.category }}</span>
-        <span>{{ manifest.inputs.length }} 个输入</span>
-        <span>{{ manifest.parameters.length }} 个参数</span>
-        <span :class="compatibility?.status === 'READY' ? 'green' : ''">{{ compatibility?.status || '待检查' }}</span>
-      </div>
-
-      <div class="dynamic-fields">
-        <div v-for="item in manifest.inputs" :key="item.key" class="dynamic-field">
-          <label>{{ item.label }} <em v-if="item.required">*</em></label>
-          <div v-if="isFileInput(item.type)" class="upload-box compact-upload">
-            <Image v-if="item.type === 'image'" :size="24" />
-            <Upload v-else :size="24" />
-            <span>{{ uploadedNames[item.key] || item.help || `选择${item.label}` }}</span>
-            <input class="file-overlay" type="file" :accept="item.accept?.join(',')" @change="uploadMaterial($event, item.key)" />
-          </div>
-          <textarea v-else-if="item.type === 'textarea'" :value="String(values[item.key] ?? '')" :placeholder="item.help || item.description" @input="setTextValue($event, item.key)"></textarea>
-          <select v-else-if="item.type === 'boolean'" v-model="values[item.key]"><option :value="false">关闭</option><option :value="true">开启</option></select>
-          <input v-else v-model="values[item.key]" :type="['number','seed','slider'].includes(item.type) ? 'number' : 'text'" :placeholder="item.help || item.description" />
-          <small v-if="item.purpose">用途：{{ item.purpose }}</small>
-        </div>
-      </div>
-
-      <div v-if="manifest.parameters.length" class="parameter-grid">
-        <div v-for="item in manifest.parameters" :key="item.key" class="dynamic-field">
-          <label>{{ item.label }}</label>
-          <select v-if="item.type === 'select'" v-model="parameters[item.key]">
-            <option v-for="option in item.options || []" :key="String(option)" :value="option">{{ option }}</option>
-          </select>
-          <select v-else-if="item.type === 'boolean'" v-model="parameters[item.key]"><option :value="false">关闭</option><option :value="true">开启</option></select>
-          <input v-else v-model="parameters[item.key]" :type="['number','seed','slider'].includes(item.type) ? 'number' : 'text'" :min="item.min ?? undefined" :max="item.max ?? undefined" :step="item.step ?? undefined" />
-          <small>{{ item.description }} {{ item.unit ? `· ${item.unit}` : '' }}</small>
-        </div>
-      </div>
-
-      <div class="runtime-safety">
-        <span>Runtime Clone：{{ manifest.runtime?.preserveOriginalWorkflow === false ? '关闭' : '开启' }}</span>
-        <span>执行：{{ manifest.runtime?.executionMode || 'serial' }}</span>
-        <span>UNKNOWN 自动重试：{{ manifest.runtime?.retryUnknown ? '开启' : '禁止' }}</span>
-      </div>
-
-      <button class="primary wide" :disabled="submitting || compatibility?.status === 'MISSING_NODES'" @click="submitTask">
-        {{ submitting ? '正在创建任务...' : '开始生成' }}
-      </button>
-      <p v-if="error" class="inline-error">{{ error }}</p>
-      <div v-if="taskResult" class="task-created"><CircleCheck :size="18" /><div><b>任务已进入队列</b><small>{{ taskResult.taskId }} · {{ taskResult.status }}</small></div></div>
-    </template>
-  </div>
-</template>
+<template><div class="dynamic-task-form production-run"><div class="workflow-selected task-workflow-select"><div class="workflow-cover"><Film :size="28"/></div><div><b>{{selected?.name||'选择已认证工作流'}}</b><p>{{selected?.description||'只有 CERTIFIED 且依赖 READY 的 Workflow 可以生产运行。'}}</p></div><select v-model="selectedId" class="workflow-select"><option v-for="w in workflows" :key="w.id" :value="w.id">{{w.name}}</option></select></div><div v-if="loading" class="notice">正在刷新 Runtime Preflight Certification…</div><div v-else-if="!manifest" class="notice">当前没有可生产运行的 CERTIFIED Workflow。</div><template v-else><div class="manifest-summary"><span class="badge">CERTIFIED</span><span>{{manifest.category}}</span><span>Runtime Clone</span><span>严格串行</span></div>
+<section class="run-section"><h3>主要输入</h3><div class="dynamic-fields"><div v-for="f in manifest.inputs" :key="f.key" class="dynamic-field"><label>{{f.label}} <em v-if="f.required">*</em></label><div v-if="fileField(f.type)" class="upload-box compact-upload"><img v-if="f.type==='image'&&previews[f.key]" :src="previews[f.key]" class="material-preview"/><video v-else-if="f.type==='video'&&previews[f.key]" :src="previews[f.key]" class="material-preview" muted/><Image v-else-if="f.type==='image'" :size="24"/><Upload v-else :size="24"/><span>{{names[f.key]||f.help||`选择${f.label}`}}</span><input class="file-overlay" type="file" :accept="f.accept?.join(',')" @change="upload($event,f)"/><button v-if="values[f.key]" class="remove-file" @click.stop="removeFile(f.key)"><Trash2 :size="14"/></button></div><textarea v-else-if="f.type==='textarea'" v-model="values[f.key]" :placeholder="f.help||f.description"></textarea><select v-else-if="f.type==='select'" v-model="values[f.key]"><option v-for="o in f.options||[]" :key="String(o)" :value="o">{{o}}</option></select><select v-else-if="f.type==='boolean'" v-model="values[f.key]"><option :value="false">关闭</option><option :value="true">开启</option></select><input v-else v-model="values[f.key]" :type="['number','seed','slider'].includes(f.type)?'number':'text'" :placeholder="f.help||f.description"/><small>{{f.description||f.purpose}}</small></div></div></section>
+<details v-if="manifest.parameters.length" class="advanced" open><summary>高级参数 · {{manifest.parameters.length}}</summary><div class="parameter-grid"><div v-for="f in manifest.parameters" :key="f.key" class="dynamic-field"><label>{{f.label}}</label><select v-if="f.type==='select'" v-model="parameters[f.key]"><option v-for="o in f.options||[]" :key="String(o)" :value="o">{{o}}</option></select><select v-else-if="f.type==='boolean'" v-model="parameters[f.key]"><option :value="false">关闭</option><option :value="true">开启</option></select><div v-else class="seed-row"><input v-model="parameters[f.key]" :type="['number','seed','slider'].includes(f.type)?'number':'text'" :min="f.min??undefined" :max="f.max??undefined" :step="f.step??undefined"/><button v-if="f.type==='seed'" class="secondary" @click="randomSeed(f.key)">随机</button></div><small>{{f.description}} {{f.unit}}</small></div></div></details><button class="primary wide" :disabled="submitting" @click="submit">{{submitting?'正在认证并创建…':'开始生产运行'}}</button><p v-if="error" class="inline-error">{{error}}</p>
+<section v-if="current" class="run-result"><div class="section-head"><div><span class="eyebrow">PRODUCTION RUN</span><h3>{{current.id||current.taskId}}</h3></div><span :class="['status-chip',current.status==='SUCCEEDED'?'success':current.status==='FAILED'?'danger-chip':'running']">{{current.status}}</span></div><div class="run-meta"><span>Prompt {{current.prompt_id||'等待提交'}}</span><span v-if="current.durationSeconds">{{current.durationSeconds}} 秒</span><span>{{current.created_at}}</span></div><p v-if="current.error" class="inline-error">{{current.error}}</p><div v-if="current.outputs?.length" class="run-outputs"><article v-for="o in current.outputs" :key="o.id"><img v-if="o.type==='image'" :src="`/api/outputs/${o.id}/file`"/><video v-else-if="o.type==='video'" :src="`/api/outputs/${o.id}/file`" controls/><audio v-else-if="o.type==='audio'" :src="`/api/outputs/${o.id}/file`" controls/><b>{{basename(o.file_path)}}</b><a :href="`/api/outputs/${o.id}/file?download=true`"><Download :size="14"/> 下载</a></article></div></section><section v-if="recent.length" class="recent-runs"><h3>最近生产运行</h3><div v-for="r in recent" :key="r.id" class="recent-row"><div><b>{{r.id}}</b><small>{{r.created_at}} · {{r.status}}</small></div><button class="secondary" :disabled="submitting" @click="rerun(r.id!)"><RefreshCw :size="14"/> 再次运行</button></div></section></template></div></template>

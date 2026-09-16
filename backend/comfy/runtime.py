@@ -161,14 +161,15 @@ def run_task(db: Database, task_id: str) -> None:
 
     with db.connect() as conn:
         pilot = conn.execute(
-            "SELECT 1 FROM generation_task_events WHERE task_id=? AND event='PILOT_AUTHORIZED' LIMIT 1", (task_id,)
+            "SELECT event FROM generation_task_events WHERE task_id=? AND event IN ('PILOT_AUTHORIZED','RUN_AUTHORIZED') LIMIT 1", (task_id,)
         ).fetchone()
     if pilot:
         from backend.workflow.preflight import PREFLIGHT_CERTIFIED, preflight_detail
         final_preflight = preflight_detail(db, workflow['id'], force_refresh=True)
         if not final_preflight or final_preflight['status'] != PREFLIGHT_CERTIFIED or final_preflight.get('dependencyStatus') != 'READY':
-            raise WorkflowConversionError('PILOT_PREFLIGHT_CHANGED: runtime submission refused')
-        _event(db, task_id, 'PILOT_FINAL_PREFLIGHT', 'Certified immediately before /prompt', {
+            raise WorkflowConversionError('CERTIFICATION_CHANGED: runtime submission refused')
+        event_name = 'RUN_FINAL_PREFLIGHT' if pilot['event'] == 'RUN_AUTHORIZED' else 'PILOT_FINAL_PREFLIGHT'
+        _event(db, task_id, event_name, 'Certified immediately before /prompt', {
             'status': final_preflight['status'], 'sourceFormat': final_preflight['sourceFormat'],
         })
 

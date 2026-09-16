@@ -24,6 +24,7 @@ from backend.workflow.manifest_review_api import manifest_review_router
 from backend.workflow.readiness_api import workflow_readiness_router
 from backend.workflow.remediation_guides_api import remediation_guides_router
 from backend.workflow.pilot_api import workflow_pilot_router
+from backend.workflow.runs_api import workflow_runs_router
 
 
 def create_app() -> FastAPI:
@@ -53,8 +54,8 @@ def create_app() -> FastAPI:
         return {
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
-            'phase': '1G',
-            'subphase': '1G-4',
+            'phase': '1H',
+            'subphase': '1H-1',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -252,15 +253,19 @@ def create_app() -> FastAPI:
         return [dict(row) for row in rows]
 
     @app.get('/api/outputs/{output_id}/file')
-    def output_file(output_id: str):
+    def output_file(output_id: str, download: bool = False):
         with db.connect() as conn:
             row = conn.execute('SELECT * FROM outputs WHERE id=?', (output_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail='output_not_found')
-        path = Path(row['file_path'])
+        path = Path(row['file_path']).resolve()
+        try:
+            path.relative_to((ROOT / 'storage' / 'outputs').resolve())
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail='output_path_outside_storage') from exc
         if not path.is_file():
             raise HTTPException(status_code=404, detail='output_file_missing')
-        return FileResponse(path)
+        return FileResponse(path, filename=path.name if download else None, content_disposition_type='attachment' if download else 'inline')
 
     app.include_router(workflow_knowledge_router(db))
     app.include_router(workflow_dependencies_router())
@@ -269,6 +274,7 @@ def create_app() -> FastAPI:
     app.include_router(workflow_readiness_router(db))
     app.include_router(remediation_guides_router())
     app.include_router(workflow_pilot_router(db))
+    app.include_router(workflow_runs_router(db))
     app.include_router(bindings_router(db))
     return app
 
