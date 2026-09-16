@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Any
 
 from backend.workflow.dependencies import dependency_inventory
@@ -102,7 +102,8 @@ def build_readiness_plan(
 
     blocker_rows: list[dict[str, Any]] = []
     for key, item in blocker_usage.items():
-        affected = len(set(item['workflowIds']))
+        workflow_ids = list(dict.fromkeys(str(value) for value in item['workflowIds'] if value))
+        affected = len(workflow_ids)
         unlock = int(single_blocker_usage.get(key, 0))
         blocker_rows.append(
             {
@@ -116,6 +117,7 @@ def build_readiness_plan(
                 'priorityScore': unlock * 100 + affected,
                 'categories': [{'key': k, 'count': v} for k, v in item['categories'].most_common()],
                 'capabilities': [{'key': k, 'count': v} for k, v in item['capabilities'].most_common()],
+                'workflowIds': workflow_ids,
                 'workflows': item['workflows'][:50],
             }
         )
@@ -125,6 +127,7 @@ def build_readiness_plan(
     model_blockers = [item for item in blocker_rows if item['kind'] == 'MODEL']
     node_blockers = [item for item in blocker_rows if item['kind'] == 'NODE']
     near_ready = [item for item in workflow_rows if item['nearReady']]
+    inventory_summary = inventory.get('summary') or {}
 
     return {
         'connected': connected,
@@ -140,6 +143,8 @@ def build_readiness_plan(
             'modelBlockers': len(model_blockers),
             'nodeBlockers': len(node_blockers),
             'topUnlockPotential': sum(item['unlockCount'] for item in blocker_rows[:10]),
+            'ignoredNodeTypes': int(inventory_summary.get('ignoredNodeTypes') or 0),
+            'ignoredNodeOccurrences': int(inventory_summary.get('ignoredNodeOccurrences') or 0),
         },
         'topBlockers': blocker_rows[: max(1, min(limit, 500))],
         'modelBlockers': model_blockers[: max(1, min(limit, 500))],
