@@ -49,7 +49,25 @@ def _walk_strings(value: Any):
 
 
 def classify_model_type(node_type: str, field_name: str, model_name: str) -> str:
-    text = f'{node_type} {field_name} {model_name}'.casefold().replace('-', '_')
+    field = field_name.casefold().replace('-', '_')
+    if any(token in field for token in ('control_net', 'controlnet')):
+        return 'controlnet'
+    if 'lora' in field:
+        return 'lora'
+    if 'clip_vision' in field or 'vision_model' in field:
+        return 'vision'
+    if any(token in field for token in ('text_encoder', 'clip_name')):
+        return 'text-encoder'
+    if 'vae' in field:
+        return 'vae'
+    if any(token in field for token in ('upscale_model', 'upscalemodel')):
+        return 'upscaler'
+    if any(token in field for token in ('ckpt_name', 'checkpoint')):
+        return 'checkpoint'
+    if any(token in field for token in ('unet_name', 'diffusion_model', 'transformer_model')):
+        return 'diffusion-model'
+
+    text = f'{node_type} {model_name}'.casefold().replace('-', '_')
     if any(token in text for token in ('control_net', 'controlnet')):
         return 'controlnet'
     if 'lora' in text:
@@ -71,6 +89,12 @@ def classify_model_type(node_type: str, field_name: str, model_name: str) -> str
     if any(token in text for token in ('unet_name', 'diffusion_model', 'diffusionmodel', 'transformer_model', 'wanvideomodel', 'ggufloader')):
         return 'diffusion-model'
     return 'other'
+
+
+def _primary_model_type(model_types: list[str], inferred_type: str) -> str:
+    if inferred_type != 'other' and inferred_type in model_types:
+        return inferred_type
+    return next((value for value in model_types if value != 'other'), inferred_type)
 
 
 def extract_comfy_model_catalog(object_info: dict[str, Any]) -> list[dict[str, str]]:
@@ -139,7 +163,7 @@ def match_declared_model(
             'status': 'PRESENT',
             'matched': exact[declared],
             'match': 'exact',
-            'modelType': model_types[0] if len(model_types) == 1 else inferred_type,
+            'modelType': _primary_model_type(model_types, inferred_type),
             'modelTypes': model_types or [inferred_type],
         }
     basename_matches = [item for item in available if _basename(item) == declared_base]
@@ -150,7 +174,7 @@ def match_declared_model(
             'status': 'PRESENT',
             'matched': basename_matches[0],
             'match': 'basename' if len(basename_matches) == 1 else 'basename-ambiguous',
-            'modelType': model_types[0] if len(model_types) == 1 else inferred_type,
+            'modelType': _primary_model_type(model_types, inferred_type),
             'modelTypes': model_types or [inferred_type],
         }
         if len(basename_matches) > 1:
@@ -316,7 +340,11 @@ def _build_dependency_inventory(client: ComfyClient) -> dict[str, Any]:
     node_rows.sort(key=lambda item: (item['status'] != 'MISSING', item['nodeType'].casefold()))
 
     status_counts = Counter(item['status'] for item in workflows)
-    type_counts = Counter(item['modelType'] for item in model_rows)
+    type_counts = Counter(
+        model_type
+        for item in model_rows
+        for model_type in (item.get('modelTypes') or [item['modelType']])
+    )
     return {
         'connected': connected,
         'comfyUiUrl': client.base_url,

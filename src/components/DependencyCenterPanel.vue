@@ -269,7 +269,7 @@ onMounted(() => void loadAll())
     </div>
 
     <div v-else-if="tab==='models'" class="dep-list compact">
-      <article v-for="item in filteredModels" :key="item.name" class="dep-row"><div><strong>{{ item.name }}</strong><span class="model-type">{{ modelTypeLabel(item.modelType) }}</span><span v-if="item.matched">ComfyUI: {{ item.matched }}</span><span>{{ item.workflows.length }} 个工作流依赖</span></div><b :class="['state',item.status.toLowerCase()]">{{ statusLabel(item.status) }}</b></article>
+      <article v-for="item in filteredModels" :key="item.name" class="dep-row"><div><strong>{{ item.name }}</strong><span class="model-type">{{ (item.modelTypes?.length ? item.modelTypes : [item.modelType]).map(modelTypeLabel).join(' / ') }}</span><span v-if="item.matched">ComfyUI: {{ item.matched }}</span><span>{{ item.workflows.length }} 个工作流依赖</span></div><b :class="['state',item.status.toLowerCase()]">{{ statusLabel(item.status) }}</b></article>
       <p v-if="!filteredModels.length" class="empty">没有匹配模型。</p>
     </div>
 

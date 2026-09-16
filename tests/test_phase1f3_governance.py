@@ -98,6 +98,16 @@ class Phase1F3GovernanceTests(unittest.TestCase):
         self.assertEqual(by_name['sdxl_vae.safetensors'], 'vae')
         self.assertEqual(by_name['depth-control.safetensors'], 'controlnet')
         self.assertEqual(by_name['style.safetensors'], 'lora')
+
+    def test_explicit_model_field_wins_over_node_name(self):
+        self.assertEqual(
+            classify_model_type('LTXVAudioVAELoader', 'ckpt_name', 'ltx-model.safetensors'),
+            'checkpoint',
+        )
+        self.assertEqual(
+            classify_model_type('CreateHookModelAsLora', 'ckpt_name', 'model.safetensors'),
+            'checkpoint',
+        )
         self.assertEqual(classify_model_type('UNETLoader', 'unet_name', 'wan.gguf'), 'diffusion-model')
 
     def test_live_missing_dependency_overrides_manifest_ready_health(self):
