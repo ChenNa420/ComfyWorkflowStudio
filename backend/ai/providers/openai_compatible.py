@@ -222,10 +222,10 @@ class OpenAICompatibleComicProvider:
     def generate_episode_shot(self, slot: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         purpose = ('You are filling exactly one pre-planned shot. Do not add another shot. '
                    'Do not change the shot id, source pages, or source evidence. Do not invent source evidence. '
-                   'Use only the supplied shot purpose, relevant story beats, characters, and scenes; do not borrow events from later shots. '
+                   'Use only the supplied shot purpose, subFocus, assigned dialogue, relevant story beats, characters, and scenes. Every depicted action, decision, outcome, and spoken line must be explicitly present in that current-slot material; omit details rather than infer them. Do not borrow events from later shots. '
                    'Give this shot a short, distinct title and do not repeat the story title. '
                    'Speaker must be exactly one supplied character id or null; never return a name, unknown, or a group. '
-                   'For Pre-A1, keep spoken English to 2-8 words. If there is no grounded dialogue, use empty dialogue and null speaker. '
+                   'Use at most the assigned dialogue for this slot; do not invent or copy dialogue from another slot. For Pre-A1, keep spoken English to 2-8 words. If there is no assigned grounded dialogue, use empty dialogue and null speaker. '
                    'Return exactly one JSON object.' + self._schema_instruction('episode_shot_draft'))
         safe_settings = {key: settings.get(key) for key in ('level', 'age', 'aspectRatio', 'style', 'language')}
         return self._request(purpose, {'_schema': 'episode_shot_draft', 'shotSlot': slot,

@@ -339,7 +339,7 @@ def restore_source_evidence(ids: list[str], restore: dict[str, dict[str, Any]]) 
     for evidence_id in ids:
         if evidence_id in seen or evidence_id not in restore:
             continue
-        seen.add(evidence_id); result.append(dict(restore[evidence_id]))
+        seen.add(evidence_id); result.append({'id': evidence_id, **restore[evidence_id]})
     return result
 
 
@@ -361,7 +361,8 @@ def write_cached(path: Path, value: dict[str, Any]) -> None:
     os.replace(temp, path)
 
 
-def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, Any]], plan: dict[str, Any] | None = None, effective_shot_count: int | None = None) -> dict[str, Any]:
+def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, Any]], plan: dict[str, Any] | None = None,
+                           effective_shot_count: int | None = None, context: dict[str, Any] | None = None) -> dict[str, Any]:
     evidence_ids = list(draft.get('sourceEvidenceIds', []))
     for beat in draft.get('storyBeats', []):
         evidence_ids.extend(beat.get('sourceEvidenceIds', []))
@@ -372,6 +373,7 @@ def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, A
         'storyBeats': draft.get('storyBeats', []), 'ending': draft['ending'],
         'learningGoals': draft.get('learningGoals', []),
         'sourceEvidence': restore_source_evidence(evidence_ids, restore),
+        'keyDialogues': list((context or {}).get('keyDialogues', [])),
         'adaptationNotes': draft.get('adaptationNotes', []),
         'narrativeType': plan.get('narrativeType', 'narrative_story'),
         'recommendedShotCount': effective_shot_count or plan.get('recommendedShotCount'),

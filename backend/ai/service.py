@@ -23,7 +23,7 @@ from .adaptation import (
 from .episode_planning import (
     EPISODE_PLAN_REVISION, EPISODE_SHOT_PROMPT_VERSION, assemble_episode,
     build_episode_shot_plan, compact_shot_context, episode_cache_key,
-    normalize_shot_draft, resolve_shot_count,
+    normalize_shot_draft, plan_quality, resolve_shot_count,
 )
 
 MAX_ARCHIVE_IMAGE_BYTES = 25 * 1024 * 1024
@@ -392,7 +392,9 @@ class ComicAiService:
             else:
                 validate_draft_references(draft, context)
             adapt_duration = time.perf_counter() - adapt_started
-            value = AdaptedStory.model_validate(final_story_from_draft(draft, restore, plan, effective_shot_count)).model_dump()
+            value = AdaptedStory.model_validate(
+                final_story_from_draft(draft, restore, plan, effective_shot_count, context)
+            ).model_dump()
             value['qualitySummary'] = {
                 'adaptationNotes': len(value['adaptationNotes']), 'stagedAdaptation': True,
                 'schemaVersion': ADAPT_SCHEMA_VERSION, 'promptVersion': ADAPT_PROMPT_VERSION,
@@ -464,12 +466,14 @@ class ComicAiService:
             value = Episode.model_validate(assemble_episode(story, settings, plan, drafts)).model_dump()
             if len(value['shots']) != count or [item['id'] for item in value['shots']] != list(range(1, count + 1)):
                 raise ComicAiError('AI_RESPONSE_INVALID', 'Episode assembly does not match shot plan')
+            grounded_quality = plan_quality(story, plan)
             value['qualitySummary'] = {
                 'episodeShots': len(value['shots']), 'resolvedShotCount': count,
                 'adaptedDialogues': sum(x['dialogueSource'] == 'adapted' for x in value['shots']),
                 'sourceDialogues': 0, 'invalidSpeakersNormalized': invalid_speakers,
                 'deterministicShotPlan': True, 'planRevision': EPISODE_PLAN_REVISION,
                 'promptVersion': EPISODE_SHOT_PROMPT_VERSION,
+                **grounded_quality,
                 'cache': {'planHit': plan_hit, 'shotHits': cache_hits, 'shotMisses': count - cache_hits},
             }
             return value

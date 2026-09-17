@@ -211,6 +211,7 @@ class PageVisualResult(BaseModel):
 
 
 class SourceEvidence(BaseModel):
+    id: str | None = None
     sourcePage: int = Field(ge=1)
     evidence: str = ''
 
@@ -312,6 +313,7 @@ class AdaptedStory(BaseModel):
     ending: str
     learningGoals: list[str]
     sourceEvidence: list[SourceEvidence]
+    keyDialogues: list[AdaptationDialogue] = Field(default_factory=list)
     adaptationNotes: list[str] = Field(default_factory=list)
     narrativeType: str = 'narrative_story'
     recommendedShotCount: int | None = Field(default=None, ge=1, le=12)
@@ -339,8 +341,15 @@ class EpisodeShotSlot(BaseModel):
     id: int = Field(ge=1)
     beatIds: list[str] = Field(min_length=1)
     purpose: str
+    subFocus: str
     sourcePages: list[int] = Field(min_length=1)
     sourceEvidence: list[SourceEvidence]
+    evidenceIds: list[str] = Field(default_factory=list)
+    dialogueIds: list[str] = Field(default_factory=list)
+    assignedDialogues: list[AdaptationDialogue] = Field(default_factory=list)
+    evidenceMappingMode: Literal['exact_beat', 'page_fallback', 'none'] = 'none'
+    sequenceIndex: int = Field(default=1, ge=1)
+    sequenceTotal: int = Field(default=1, ge=1)
     characterIds: list[str] = Field(default_factory=list)
     targetDuration: float = Field(gt=0, le=10)
 
@@ -381,6 +390,14 @@ class EpisodeShot(BaseModel):
     negativePrompt: str
     sourcePages: list[int] = Field(min_length=1)
     sourceEvidence: list[SourceEvidence]
+    beatIds: list[str] = Field(default_factory=list)
+    subFocus: str = ''
+    evidenceIds: list[str] = Field(default_factory=list)
+    dialogueIds: list[str] = Field(default_factory=list)
+    evidenceMappingMode: Literal['exact_beat', 'page_fallback', 'none'] = 'none'
+    sequenceIndex: int = Field(default=1, ge=1)
+    sequenceTotal: int = Field(default=1, ge=1)
+    redundantShot: bool = False
     dialogueSource: Literal['source', 'adapted', 'none']
 
     @model_validator(mode='after')
