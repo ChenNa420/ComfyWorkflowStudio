@@ -9,6 +9,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+import fitz
 from backend.ai.schema_prompt import schema_instruction, SCHEMAS
 from backend.db import ROOT
 
@@ -24,6 +25,8 @@ SEMANTIC_RULES = '''This is a comic understanding task, not free story writing.
 8. Never invent missing dialogue.
 9. Page numbers must reference supplied pages only.
 10. Confidence must reflect uncertainty.
+11. Return at most 4 prominent story characters. Merge the same character across panels and omit tiny adverts, background cameos, and characters depicted only inside a picture or story-within-story.
+12. Keep the response concise: at most 6 scenes, 10 dialogues, and 8 plot events; use one short evidence item per record and keep descriptive fields under 20 words.
 Do not rewrite the plot, add dialogue, create an ending, or educationally adapt content.'''
 
 
@@ -69,6 +72,9 @@ class OpenAICompatibleComicProvider:
     def _is_local(self) -> bool:
         return (urlsplit(self.base_url).hostname or '').lower() in {'localhost', '127.0.0.1', '::1'}
 
+    def _schema_instruction(self, name: str) -> str:
+        return '' if self.structured_output == 'json_schema' else '\n' + schema_instruction(name)
+
     def get_status(self) -> dict[str, Any]:
         endpoint_allowed = self._is_local() or self.allow_remote
         configured = bool(self.base_url and self.model and endpoint_allowed)
@@ -109,8 +115,9 @@ class OpenAICompatibleComicProvider:
             if page_labels: content.append({'type': 'text', 'text': f'PAGE {page_labels[index]}'})
             content.append({'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + base64.b64encode(raw).decode('ascii')}})
         response_format: dict[str, Any] = {'type': 'json_object'}
-        if self.structured_output == 'json_schema' and data.get('_schema'):
-            response_format = {'type': 'json_schema', 'json_schema': {'name': data['_schema'], 'schema': SCHEMAS[data['_schema']]}}
+        if self.structured_output == 'json_schema':
+            response_format = ({'type': 'json_schema', 'json_schema': {'name': data['_schema'], 'schema': SCHEMAS[data['_schema']]}}
+                               if data.get('_schema') else {'type': 'text'})
         body = json.dumps({'model': self.model, 'messages': [{'role': 'user', 'content': content}],
                            'temperature': 0.1, 'response_format': response_format}).encode()
         headers = {'Content-Type': 'application/json'}
@@ -120,11 +127,16 @@ class OpenAICompatibleComicProvider:
         for attempt in range(self.max_retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as response: envelope = json.loads(response.read().decode('utf-8'))
-                parsed = parse_json_response(envelope['choices'][0]['message']['content']); self._debug_response(purpose.split()[0].lower(), parsed)
+                content_text = envelope['choices'][0]['message']['content']
+                self._debug_response(purpose.split()[0].lower() + '-raw', {'rawResponse': content_text})
+                parsed = parse_json_response(content_text); self._debug_response(purpose.split()[0].lower(), parsed)
                 if attempt: parsed['_requestRetries'] = attempt
                 return parsed
             except urllib.error.HTTPError as exc:
-                code = 'AI_CONTEXT_TOO_LARGE' if exc.code == 413 else 'AI_PROVIDER_UNAVAILABLE'
+                error_body = exc.read().decode('utf-8', errors='replace')
+                self._debug_response('http-error', {'status': exc.code, 'body': error_body})
+                lowered = error_body.lower()
+                code = 'AI_CONTEXT_TOO_LARGE' if exc.code == 413 or 'context' in lowered or 'token' in lowered else 'AI_PROVIDER_UNAVAILABLE'
                 raise RuntimeError(code) from exc
             except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError) as exc:
                 if attempt < self.max_retries: continue
@@ -134,19 +146,23 @@ class OpenAICompatibleComicProvider:
                 raise ValueError('AI_RESPONSE_INVALID') from exc
 
     def probe(self) -> dict[str, Any]:
-        # Tiny generated-in-code 1x1 JPEG; never sends user material.
-        image = base64.b64decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EH//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EH//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EH//2Q==')
-        value = self._request('Probe vision and structured JSON. Describe whether an image was received.', {'expected': {'vision': True, 'structured': True}}, [image])
+        # Generated test card only; no user material leaves the machine.
+        with fitz.open() as document:
+            page = document.new_page(width=320, height=160)
+            page.draw_rect(fitz.Rect(8, 8, 312, 152), color=(0.1, 0.2, 0.8), width=4)
+            page.insert_text((38, 92), 'VISION TEST 42', fontsize=28, color=(0, 0, 0))
+            image = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).tobytes('jpeg', jpg_quality=90)
+        value = self._request('Read the test image. Return exactly one JSON object with top-level keys vision and structured. Set both to true only when the image text contains the number 42; otherwise set both to false.', {}, [image])
         _PROBE_STATE.update({'reachable': True, 'visionVerified': value.get('vision') is True, 'structuredOutputVerified': isinstance(value, dict) and value.get('structured') is True, 'lastProbeAt': datetime.now(timezone.utc).isoformat()})
         return {**self.get_status(), 'probeResult': value}
 
     def analyze_comic_pages(self, pages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]:
         images = [p['image'] for p in pages if p.get('image')]
         safe_pages = [{'page': p['page'], 'text': p.get('text', '')} for p in pages]
-        return self._request(SEMANTIC_RULES + '\n' + schema_instruction('semantic'), {'_schema': 'semantic', 'pages': safe_pages, 'previousContext': context or {}}, images, [p['page'] for p in pages if p.get('image')])
+        return self._request(SEMANTIC_RULES + self._schema_instruction('semantic'), {'_schema': 'semantic', 'pages': safe_pages, 'previousContext': context or {}}, images, [p['page'] for p in pages if p.get('image')])
 
     def adapt_story(self, analysis: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-        return self._request('Adapt this source analysis into a child-safe story. Clearly separate Source Facts from Adapted Content, preserve evidence mappings, and list every creative change in adaptationNotes.\n' + schema_instruction('adapted_story'), {'_schema': 'adapted_story', 'analysis': analysis, 'settings': settings})
+        return self._request('Adapt this source analysis into a child-safe story. Clearly separate Source Facts from Adapted Content, preserve evidence mappings, and list every creative change in adaptationNotes.' + self._schema_instruction('adapted_story'), {'_schema': 'adapted_story', 'analysis': analysis, 'settings': settings})
 
     def generate_episode(self, story: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-        return self._request('Generate exactly the requested production Episode shots with grounded prompts and stable speaker keys. For Pre-A1 use 2-8 English words per line. imagePrompt must include stable character appearance, clothing, scene, composition, action start, and art style. videoPrompt must include action change, camera, environment motion, dialogue, and continuity.\n' + schema_instruction('episode'), {'_schema': 'episode', 'adaptedStory': story, 'settings': settings})
+        return self._request('Generate exactly the requested production Episode shots with grounded prompts and stable speaker keys. For Pre-A1 use 2-8 English words per line. imagePrompt must include stable character appearance, clothing, scene, composition, action start, and art style. videoPrompt must include action change, camera, environment motion, dialogue, and continuity.' + self._schema_instruction('episode'), {'_schema': 'episode', 'adaptedStory': story, 'settings': settings})

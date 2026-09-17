@@ -101,15 +101,15 @@ class StorySummary(BaseModel):
 
 class SemanticAnalysis(BaseModel):
     id: str = ""
-    characters: list[Character] = Field(default_factory=list)
-    scenes: list[Scene] = Field(default_factory=list)
-    dialogues: list[Dialogue] = Field(default_factory=list)
-    plotEvents: list[PlotEvent] = Field(default_factory=list)
+    characters: list[Character] = Field(default_factory=list, max_length=4)
+    scenes: list[Scene] = Field(default_factory=list, max_length=6)
+    dialogues: list[Dialogue] = Field(default_factory=list, max_length=10)
+    plotEvents: list[PlotEvent] = Field(default_factory=list, max_length=8)
     visualStyle: VisualStyle = Field(default_factory=VisualStyle)
-    props: list[Prop] = Field(default_factory=list)
-    locations: list[Location] = Field(default_factory=list)
+    props: list[Prop] = Field(default_factory=list, max_length=8)
+    locations: list[Location] = Field(default_factory=list, max_length=4)
     storySummary: StorySummary = Field(default_factory=StorySummary)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list, max_length=8)
     needsReview: bool = False
 
     @model_validator(mode='after')

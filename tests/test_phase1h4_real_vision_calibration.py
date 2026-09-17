@@ -1,7 +1,9 @@
 import json
+import io
 import os
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -49,6 +51,19 @@ class Phase1H4Tests(unittest.TestCase):
         self.assertEqual(kinds,['text','text','image_url','text','image_url'])
         self.assertEqual(content[1]['text'],'PAGE 3'); self.assertEqual(content[3]['text'],'PAGE 4')
         self.assertIn('Do not guess names',content[0]['text']); self.assertIn('not free story writing',SEMANTIC_RULES)
+        self.assertIn('at most 4 prominent story characters', content[0]['text'])
+
+    def test_lm_studio_probe_uses_text_but_schema_calls_stay_strict(self):
+        env={'COMIC_AI_BASE_URL':'http://127.0.0.1:9999/v1','COMIC_AI_MODEL':'vision','COMIC_AI_STRUCTURED_OUTPUT':'json_schema'}
+        formats=[]
+        def open_(request,timeout):
+            body=json.loads(request.data); formats.append(body['response_format'])
+            return Response({'vision':True,'structured':True} if len(formats)==1 else semantic(1))
+        with patch.dict(os.environ,env,clear=True), patch('urllib.request.urlopen',side_effect=open_):
+            provider=OpenAICompatibleComicProvider(); provider.probe(); provider.analyze_comic_pages([{'page':1,'text':'','image':b'a'}])
+        self.assertEqual(formats[0],{'type':'text'})
+        self.assertEqual(formats[1]['type'],'json_schema'); self.assertEqual(formats[1]['json_schema']['name'],'semantic')
+        self.assertEqual(formats[1]['json_schema']['schema']['properties']['characters']['maxItems'],4)
 
     def test_evidence_out_of_range_is_not_cached(self):
         provider=FakeProvider(); provider.analyze_comic_pages=lambda *_: semantic(6)
@@ -86,6 +101,13 @@ class Phase1H4Tests(unittest.TestCase):
         with patch.dict(os.environ,env,clear=True), patch('urllib.request.urlopen',return_value=Response('invalid')) as call:
             with self.assertRaises(ValueError): OpenAICompatibleComicProvider()._request('test',{})
             self.assertEqual(call.call_count,1)
+
+    def test_lm_studio_context_http_error_is_classified(self):
+        env={'COMIC_AI_BASE_URL':'http://127.0.0.1:9/v1','COMIC_AI_MODEL':'m'}
+        error=urllib.error.HTTPError('http://127.0.0.1:9',400,'bad request',{},io.BytesIO(b'{"error":"request exceeds available context size"}'))
+        with patch.dict(os.environ,env,clear=True), patch('urllib.request.urlopen',side_effect=error):
+            with self.assertRaisesRegex(RuntimeError,'AI_CONTEXT_TOO_LARGE'):
+                OpenAICompatibleComicProvider()._request('test',{})
 
     def test_adaptation_notes_and_character_definition_stability(self):
         story=AdaptedStory.model_validate({'title':'x','logline':'x','summary':'x','characters':[],'scenes':[],'storyBeats':[],'ending':'x','learningGoals':[],'sourceEvidence':[{'sourcePage':1,'evidence':'x'}],'adaptationNotes':['simplified dialogue']})
