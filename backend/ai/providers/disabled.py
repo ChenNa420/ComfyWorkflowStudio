@@ -45,3 +45,7 @@ class DisabledComicAiProvider:
     def generate_episode(self, story: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         del story, settings
         return {'status': 'pending'}
+
+    def generate_episode_shot(self, slot: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        del slot, context, settings
+        return {'status': 'pending'}

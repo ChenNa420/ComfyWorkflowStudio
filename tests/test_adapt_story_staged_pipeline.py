@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.ai.adaptation import build_adaptation_context
+from backend.ai.adaptation import adaptation_cache_key, build_adaptation_context
 from backend.ai.models import AdaptationContext, AdaptationPlan
 from backend.ai.service import ComicAiError, ComicAiService
 
@@ -98,11 +98,15 @@ class StagedFakeProvider:
         if self.fail_final:
             raise TimeoutError()
         evidence_ids = [item['id'] for item in context['sourceEvidence']]
-        count = self.final_beat_count or int(settings.get('shotCount') or 6)
+        count = self.final_beat_count or len(plan.get('beats', []))
         chosen = 'EX999' if self.invalid_evidence else evidence_ids[0]
-        beats = [{'id': f'B{index + 1}', 'summary': f'Adapted beat {index + 1}',
-                  'sourcePages': [1 if index < count / 2 else 2], 'sourceEvidenceIds': [chosen]}
-                 for index in range(count)]
+        beats = []
+        for index in range(count):
+            source = plan.get('beats', [])[index] if index < len(plan.get('beats', [])) else None
+            beats.append({'id': source.get('id') if source else f'B{index + 1}',
+                          'summary': f'Adapted beat {index + 1}',
+                          'sourcePages': source.get('sourcePages', [1 if index < count / 2 else 2]) if source else [1 if index < count / 2 else 2],
+                          'sourceEvidenceIds': [chosen]})
         characters = [{'id': item['id'], 'name': item['name'], 'role': item['role']}
                       for item in context['characters'][:2]]
         return {'title': 'Adapted', 'logline': 'Children solve a problem together.',
@@ -121,13 +125,21 @@ class StagedAdaptationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.semantic = source_semantic()
-        self.settings = {'audience': '3-6', 'level': 'Pre-A1', 'fidelity': 'balanced', 'shotCount': 6,
+        self.settings = {'audience': '3-6', 'level': 'Pre-A1', 'fidelity': 'balanced', 'shotCount': 6, 'autoShotCount': True,
                          'style': 'warm', 'language': 'English', 'educationGoals': ['teamwork'],
                          'preserveCharacterNames': True, 'preserveCorePlot': True, 'preserveDialogue': True,
                          'aspectRatio': '9:16'}
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_auto_and_fixed_shot_modes_use_distinct_cache_keys(self):
+        auto = dict(self.settings); auto['autoShotCount'] = True
+        fixed = dict(self.settings); fixed['autoShotCount'] = False
+        self.assertNotEqual(
+            adaptation_cache_key(self.semantic, 'fake-adapt', auto),
+            adaptation_cache_key(self.semantic, 'fake-adapt', fixed),
+        )
 
     def test_adaptation_context_compression_and_evidence_refs(self):
         context, _, stats = build_adaptation_context(self.semantic)
@@ -174,8 +186,22 @@ class StagedAdaptationTests(unittest.TestCase):
         provider = StagedFakeProvider()
         context, _, _ = build_adaptation_context(self.semantic)
         plan = AdaptationPlan.model_validate(provider.plan_adaptation(context, self.settings))
-        self.assertGreaterEqual(len(plan.beats), 4)
-        self.assertLessEqual(len(plan.beats), 8)
+        self.assertGreaterEqual(len(plan.beats), 1)
+        self.assertLessEqual(len(plan.beats), 16)
+
+    def test_sixteen_plan_beats_remain_valid_in_story_draft(self):
+        provider = StagedFakeProvider()
+        context, _, _ = build_adaptation_context(self.semantic)
+        plan = provider.plan_adaptation(context, self.settings)
+        template = plan['beats'][-1]
+        plan['beats'] = [
+            {**template, 'id': f'P{index + 1}', 'summary': f'Beat {index + 1}'}
+            for index in range(16)
+        ]
+        provider.plan_adaptation = lambda _context, _settings: plan
+        service = ComicAiService(provider, self.root / 'cache')
+        value = service.adapt(self.semantic, self.settings)
+        self.assertEqual(len(value['storyBeats']), 16)
 
     def test_source_evidence_mapping_restores_original_text(self):
         provider = StagedFakeProvider(); service = ComicAiService(provider, self.root / 'cache')
@@ -186,7 +212,9 @@ class StagedAdaptationTests(unittest.TestCase):
     def test_plan_to_adapted_story_and_source_mapping(self):
         provider = StagedFakeProvider(); service = ComicAiService(provider, self.root / 'cache')
         value = service.adapt(self.semantic, self.settings)
-        self.assertEqual(len(value['storyBeats']), 6)
+        self.assertEqual(len(value['storyBeats']), 4)
+        self.assertGreaterEqual(value['recommendedShotCount'], 4)
+        self.assertLessEqual(value['recommendedShotCount'], 12)
         self.assertTrue(value['sourceEvidence'])
         self.assertTrue(all(item['sourcePage'] in {1, 2} for item in value['sourceEvidence']))
         self.assertEqual(value['learningGoals'], ['teamwork'])
@@ -230,12 +258,71 @@ class StagedAdaptationTests(unittest.TestCase):
             service.adapt(self.semantic, self.settings)
         self.assertEqual(caught.exception.code, 'AI_RESPONSE_INVALID')
 
-    def test_six_shot_validation(self):
+    def test_plan_beat_alignment_validation(self):
         provider = StagedFakeProvider(); provider.final_beat_count = 5
         service = ComicAiService(provider, self.root / 'cache')
         with self.assertRaises(ComicAiError) as caught:
             service.adapt(self.semantic, self.settings)
         self.assertEqual(caught.exception.code, 'AI_RESPONSE_INVALID')
+
+    def test_missing_plan_beat_is_restored_deterministically(self):
+        provider = StagedFakeProvider(); provider.final_beat_count = 3
+        service = ComicAiService(provider, self.root / 'cache')
+        value = service.adapt(self.semantic, self.settings)
+        self.assertEqual([item['id'] for item in value['storyBeats']], ['P1', 'P2', 'P3', 'P4'])
+        self.assertTrue(any('Restored omitted plan beats deterministically' in note for note in value['adaptationNotes']))
+
+    def test_fixed_shot_count_remains_available_when_auto_disabled(self):
+        provider = StagedFakeProvider(); service = ComicAiService(provider, self.root / 'cache')
+        settings = dict(self.settings); settings['autoShotCount'] = False; settings['shotCount'] = 10
+        value = service.adapt(self.semantic, settings)
+        self.assertEqual(value['recommendedShotCount'], 10)
+
+    def test_episode_uses_dynamic_story_count_and_normalizes_group_speaker(self):
+        class EpisodeProvider:
+            enabled = True
+            def __init__(self): self.settings = None
+            def get_status(self):
+                return {'provider': 'fake', 'enabled': True, 'configured': True, 'model': 'fake-episode',
+                        'baseUrlSafe': 'local', 'supportsVision': True, 'isLocalEndpoint': True, 'reason': None}
+            def generate_episode(self, story, settings):
+                self.settings = dict(settings)
+                shots = []
+                for index in range(settings['shotCount']):
+                    shots.append({'id': index + 1, 'title': f'Shot {index + 1}', 'speaker': 'Hero, Ghost',
+                                  'english': '', 'chinese': '', 'duration': 5,
+                                  'imagePrompt': 'grounded image prompt', 'videoPrompt': 'grounded video prompt',
+                                  'negativePrompt': 'identity drift', 'sourcePages': [1],
+                                  'sourceEvidence': [{'sourcePage': 1, 'evidence': 'source fact'}],
+                                  'dialogueSource': 'none'})
+                return {'title': 'Episode', 'level': 'Pre-A1', 'age': '3-6', 'duration': 25,
+                        'aspectRatio': '9:16', 'characters': ['Hero', 'Ghost'],
+                        'characterDefinitions': [
+                            {'id': 'character_01', 'name': 'Hero'},
+                            {'id': 'character_02', 'name': 'Ghost'},
+                        ], 'scenes': [{'id': 'scene_01', 'description': 'safe scene', 'location': 'room'}],
+                        'shots': shots, 'source': {'type': 'comic', 'name': 'test.pdf', 'fileToken': 'token', 'pages': [1]}}
+
+        provider = EpisodeProvider(); service = ComicAiService(provider, self.root / 'cache')
+        story = {'recommendedShotCount': 5}
+        value = service.episode(story, {'shotCount': 6, 'autoShotCount': True})
+        self.assertEqual(provider.settings['shotCount'], 5)
+        self.assertEqual(len(value['shots']), 5)
+        self.assertTrue(all(item['speaker'] is None for item in value['shots']))
+
+    def test_episode_timeout_is_reported_as_ai_timeout(self):
+        class TimeoutProvider:
+            enabled = True
+            def get_status(self):
+                return {'provider': 'fake', 'enabled': True, 'configured': True, 'model': 'fake-episode',
+                        'baseUrlSafe': 'local', 'supportsVision': True, 'isLocalEndpoint': True, 'reason': None}
+            def generate_episode(self, _story, _settings):
+                raise TimeoutError('model timed out')
+
+        service = ComicAiService(TimeoutProvider(), self.root / 'cache')
+        with self.assertRaises(ComicAiError) as caught:
+            service.episode({}, {'shotCount': 5})
+        self.assertEqual(caught.exception.code, 'AI_REQUEST_TIMEOUT')
 
     def test_second_call_hits_all_three_caches(self):
         provider = StagedFakeProvider(); service = ComicAiService(provider, self.root / 'cache')

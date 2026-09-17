@@ -45,6 +45,7 @@ def adaptation_cache_key(semantic: dict[str, Any], model: str, settings: dict[st
         'level': settings.get('level'),
         'fidelity': settings.get('fidelity'),
         'shotCount': settings.get('shotCount'),
+        'autoShotCount': bool(settings.get('autoShotCount', False)),
         'style': settings.get('style'),
         'language': settings.get('language'),
         'preserveCharacterNames': settings.get('preserveCharacterNames'),
@@ -238,6 +239,45 @@ def build_adaptation_context(semantic: dict[str, Any]) -> tuple[dict[str, Any], 
     return context, restore, stats
 
 
+def recommended_shot_count(plan: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> int:
+    if not bool(settings.get('autoShotCount', False)):
+        try:
+            fixed = int(settings.get('shotCount') or 0)
+        except (TypeError, ValueError):
+            fixed = 0
+        if fixed > 0:
+            return max(1, min(12, fixed))
+    suggested = plan.get('recommendedShotCount')
+    if isinstance(suggested, int) and 1 <= suggested <= 12:
+        return suggested
+    beats = max(1, len(plan.get('beats', [])))
+    scenes = len(context.get('scenes', []))
+    dialogues = len(context.get('keyDialogues', []))
+    events = len(context.get('plotEvents', []))
+    count = max(beats, min(12, scenes or 1))
+    if dialogues > max(4, beats * 3):
+        count += 1
+    if events > max(4, beats * 2):
+        count += 1
+    return max(4, min(12, count))
+
+
+def complete_adaptation_plan(plan: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    value = dict(plan)
+    if not value.get('mainCharacters'):
+        value['mainCharacters'] = [
+            item['id'] for item in context.get('characters', [])
+            if item.get('classification') == 'main'
+        ][:4]
+    if not value.get('sourceEvidenceIds'):
+        refs: list[str] = []
+        for beat in value.get('beats', []):
+            refs.extend(beat.get('sourceEvidenceIds', []))
+        value['sourceEvidenceIds'] = list(dict.fromkeys(refs))
+    value['narrativeType'] = _clean(value.get('narrativeType')) or 'narrative_story'
+    return AdaptationPlan.model_validate(value).model_dump()
+
+
 def validate_plan_references(plan: dict[str, Any], context: dict[str, Any]) -> None:
     evidence_ids = {item['id'] for item in context.get('sourceEvidence', [])}
     character_ids = {item['id'] for item in context.get('characters', []) + context.get('backgroundCharacters', [])}
@@ -251,6 +291,33 @@ def validate_plan_references(plan: dict[str, Any], context: dict[str, Any]) -> N
     for beat in plan.get('beats', []):
         if any(item not in evidence_ids for item in beat.get('sourceEvidenceIds', [])):
             raise ValueError('ADAPT_PLAN_UNKNOWN_EVIDENCE_ID')
+
+
+def complete_adapted_story_draft(raw: dict[str, Any], plan: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    value = dict(raw or {})
+    plan_beats = {item['id']: item for item in plan.get('beats', [])}
+    raw_beats = {item.get('id'): item for item in value.get('storyBeats', []) if isinstance(item, dict) and item.get('id')}
+    extra_ids = [beat_id for beat_id in raw_beats if beat_id not in plan_beats]
+    if extra_ids:
+        raise ValueError('ADAPT_STORY_UNKNOWN_BEAT_ID')
+    completed = []
+    inserted = []
+    for beat_id, source in plan_beats.items():
+        if beat_id in raw_beats:
+            completed.append(raw_beats[beat_id])
+        else:
+            completed.append(dict(source))
+            inserted.append(beat_id)
+    value['storyBeats'] = completed
+    if not value.get('sourceEvidenceIds'):
+        value['sourceEvidenceIds'] = list(dict.fromkeys(plan.get('sourceEvidenceIds', [])))
+    if not value.get('learningGoals'):
+        value['learningGoals'] = list(settings.get('educationGoals', []))
+    notes = list(value.get('adaptationNotes', []))
+    if inserted:
+        notes.append('Restored omitted plan beats deterministically: ' + ', '.join(inserted))
+    value['adaptationNotes'] = notes
+    return AdaptedStoryDraft.model_validate(value).model_dump()
 
 
 def validate_draft_references(draft: dict[str, Any], context: dict[str, Any]) -> None:
@@ -294,10 +361,11 @@ def write_cached(path: Path, value: dict[str, Any]) -> None:
     os.replace(temp, path)
 
 
-def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, Any]], plan: dict[str, Any] | None = None, effective_shot_count: int | None = None) -> dict[str, Any]:
     evidence_ids = list(draft.get('sourceEvidenceIds', []))
     for beat in draft.get('storyBeats', []):
         evidence_ids.extend(beat.get('sourceEvidenceIds', []))
+    plan = plan or {}
     return {
         'title': draft['title'], 'logline': draft['logline'], 'summary': draft['summary'],
         'characters': draft.get('characters', []), 'scenes': draft.get('scenes', []),
@@ -305,4 +373,6 @@ def final_story_from_draft(draft: dict[str, Any], restore: dict[str, dict[str, A
         'learningGoals': draft.get('learningGoals', []),
         'sourceEvidence': restore_source_evidence(evidence_ids, restore),
         'adaptationNotes': draft.get('adaptationNotes', []),
+        'narrativeType': plan.get('narrativeType', 'narrative_story'),
+        'recommendedShotCount': effective_shot_count or plan.get('recommendedShotCount'),
     }

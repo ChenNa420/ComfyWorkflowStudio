@@ -13,12 +13,17 @@ import fitz
 from pydantic import ValidationError
 
 from backend.db import ROOT
-from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, AdaptationContext, AdaptationPlan, AdaptedStoryDraft, Episode
+from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, AdaptationContext, AdaptationPlan, AdaptedStoryDraft, Episode, EpisodeShotDraft, EpisodeShotPlan
 from .pagewise import analyze_pagewise, STRATEGY as PAGEWISE_STRATEGY
 from .adaptation import (
     ADAPT_SCHEMA_VERSION, ADAPT_PROMPT_VERSION, adaptation_cache_key, build_adaptation_context,
-    build_evidence_catalog, final_story_from_draft, read_cached, validate_draft_references,
-    validate_plan_references, write_cached,
+    build_evidence_catalog, complete_adaptation_plan, complete_adapted_story_draft, final_story_from_draft, read_cached, recommended_shot_count,
+    validate_draft_references, validate_plan_references, write_cached,
+)
+from .episode_planning import (
+    EPISODE_PLAN_REVISION, EPISODE_SHOT_PROMPT_VERSION, assemble_episode,
+    build_episode_shot_plan, compact_shot_context, episode_cache_key,
+    normalize_shot_draft, resolve_shot_count,
 )
 
 MAX_ARCHIVE_IMAGE_BYTES = 25 * 1024 * 1024
@@ -171,6 +176,37 @@ def merge_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
     else: merged['storySummary'] = {}
     merged['needsReview'] = merged.get('needsReview', False) or any(bool(x.get('needsReview')) for x in batches) or any(c.get('needsReview') for c in merged['characters'])
     return merged
+
+
+def _normalize_episode_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    value = dict(raw or {})
+    definitions = [item for item in value.get('characterDefinitions', []) if isinstance(item, dict)]
+    valid_ids = {str(item.get('id')) for item in definitions if item.get('id') is not None}
+    name_to_id: dict[str, str] = {}
+    for item in definitions:
+        cid = item.get('id')
+        name = str(item.get('name') or '').strip().lower()
+        if cid is not None and name and name not in name_to_id:
+            name_to_id[name] = str(cid)
+    shots = []
+    for item in value.get('shots', []):
+        if not isinstance(item, dict):
+            shots.append(item)
+            continue
+        shot = dict(item)
+        speaker = shot.get('speaker')
+        if shot.get('dialogueSource') == 'none':
+            shot['speaker'] = None
+        elif speaker is not None:
+            text = str(speaker).strip()
+            if text in valid_ids:
+                shot['speaker'] = text
+            else:
+                mapped = name_to_id.get(text.lower())
+                shot['speaker'] = mapped if mapped else None
+        shots.append(shot)
+    value['shots'] = shots
+    return value
 
 
 class ComicAiService:
@@ -330,32 +366,39 @@ class ComicAiService:
                 plan = AdaptationPlan.model_validate(plan_call(context, settings)).model_dump()
                 unknown = [item['id'] for item in context.get('keyDialogues', []) if item.get('speaker') == 'unknown']
                 plan['unassignedDialogue'] = list(dict.fromkeys(plan.get('unassignedDialogue', []) + unknown))
-                plan = AdaptationPlan.model_validate(plan).model_dump()
+                plan = complete_adaptation_plan(plan, context, settings)
                 validate_plan_references(plan, context)
                 with _CACHE_LOCK: write_cached(plan_path, plan)
             else:
+                completed_plan = complete_adaptation_plan(plan, context, settings)
+                if completed_plan != plan:
+                    plan = completed_plan
+                    with _CACHE_LOCK: write_cached(plan_path, plan)
                 validate_plan_references(plan, context)
             plan_duration = time.perf_counter() - plan_started
+            effective_shot_count = recommended_shot_count(plan, context, settings)
 
             adapt_started = time.perf_counter()
             draft = read_cached(story_path, AdaptedStoryDraft)
             story_hit = draft is not None
             if draft is None:
-                draft = AdaptedStoryDraft.model_validate(final_call(plan, context, settings)).model_dump()
-                expected = int(settings.get('shotCount') or 0)
-                if expected and len(draft.get('storyBeats', [])) != expected:
-                    raise ValueError('ADAPT_STORY_BEAT_COUNT_MISMATCH')
+                draft = complete_adapted_story_draft(final_call(plan, context, settings), plan, context, settings)
+                plan_beat_ids = [item.get('id') for item in plan.get('beats', [])]
+                draft_beat_ids = [item.get('id') for item in draft.get('storyBeats', [])]
+                if draft_beat_ids != plan_beat_ids:
+                    raise ValueError('ADAPT_STORY_BEAT_PLAN_MISMATCH')
                 validate_draft_references(draft, context)
                 with _CACHE_LOCK: write_cached(story_path, draft)
             else:
                 validate_draft_references(draft, context)
             adapt_duration = time.perf_counter() - adapt_started
-            value = AdaptedStory.model_validate(final_story_from_draft(draft, restore)).model_dump()
+            value = AdaptedStory.model_validate(final_story_from_draft(draft, restore, plan, effective_shot_count)).model_dump()
             value['qualitySummary'] = {
                 'adaptationNotes': len(value['adaptationNotes']), 'stagedAdaptation': True,
                 'schemaVersion': ADAPT_SCHEMA_VERSION, 'promptVersion': ADAPT_PROMPT_VERSION,
                 'cache': {'contextHit': context_hit, 'planHit': plan_hit, 'storyHit': story_hit},
                 'compression': {**stats, 'originalSemanticBytes': original_bytes, 'contextBytes': context_bytes},
+                'narrativeType': value.get('narrativeType'), 'recommendedShotCount': value.get('recommendedShotCount'),
                 'durations': {'contextBuildSeconds': round(context_duration, 3), 'planSeconds': round(plan_duration, 3),
                               'adaptSeconds': round(adapt_duration, 3), 'totalSeconds': round(time.perf_counter() - started, 3)},
             }
@@ -374,10 +417,65 @@ class ComicAiService:
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
         try:
-            value = Episode.model_validate(self.provider.generate_episode(story, settings)).model_dump()
-            expected = settings.get('shotCount')
-            if expected and len(value['shots']) != int(expected): raise ComicAiError('AI_RESPONSE_INVALID', 'Episode shot count does not match request')
-            value['qualitySummary'] = {'episodeShots': len(value['shots']), 'adaptedDialogues': sum(x['dialogueSource']=='adapted' for x in value['shots']), 'sourceDialogues': sum(x['dialogueSource']=='source' for x in value['shots'])}
+            shot_call = getattr(self.provider, 'generate_episode_shot', None)
+            if not callable(shot_call):
+                effective_settings = dict(settings)
+                explicit_count = 'shotCount' in settings or bool(settings.get('autoShotCount', False))
+                if explicit_count:
+                    effective_settings['shotCount'] = resolve_shot_count(story, settings)
+                raw_episode = self.provider.generate_episode(story, effective_settings)
+                value = Episode.model_validate(_normalize_episode_payload(raw_episode)).model_dump()
+                if explicit_count and len(value['shots']) != effective_settings['shotCount']:
+                    raise ComicAiError('AI_RESPONSE_INVALID', 'Episode shot count does not match story plan')
+                value['qualitySummary'] = {'episodeShots': len(value['shots']), 'adaptedDialogues': sum(x['dialogueSource']=='adapted' for x in value['shots']),
+                                           'sourceDialogues': sum(x['dialogueSource']=='source' for x in value['shots']),
+                                           'deterministicShotPlan': False}
+                return value
+
+            count = resolve_shot_count(story, settings)
+            plan = build_episode_shot_plan(story, settings)
+            key = episode_cache_key(story, str(status.get('model') or 'unknown'), settings, count)
+            root = self.cache_dir / 'episode' / key
+            plan_path = root / 'plan.json'
+            cached_plan = read_cached(plan_path, EpisodeShotPlan)
+            plan_hit = cached_plan == plan
+            if not plan_hit:
+                with _CACHE_LOCK:
+                    write_cached(plan_path, plan)
+            drafts = []
+            cache_hits = 0
+            invalid_speakers = 0
+            for slot in plan['shots']:
+                shot_path = root / f"shot-{slot['id']:03d}.json"
+                draft = read_cached(shot_path, EpisodeShotDraft)
+                if draft is None:
+                    raw = shot_call(slot, compact_shot_context(story, slot), settings)
+                    normalized, invalid = normalize_shot_draft(raw, slot, story)
+                    invalid_speakers += int(invalid)
+                    draft = EpisodeShotDraft.model_validate(normalized).model_dump()
+                    with _CACHE_LOCK:
+                        write_cached(shot_path, draft)
+                else:
+                    cache_hits += 1
+                    normalized, invalid = normalize_shot_draft(draft, slot, story)
+                    invalid_speakers += int(invalid)
+                    draft = EpisodeShotDraft.model_validate(normalized).model_dump()
+                drafts.append(draft)
+            value = Episode.model_validate(assemble_episode(story, settings, plan, drafts)).model_dump()
+            if len(value['shots']) != count or [item['id'] for item in value['shots']] != list(range(1, count + 1)):
+                raise ComicAiError('AI_RESPONSE_INVALID', 'Episode assembly does not match shot plan')
+            value['qualitySummary'] = {
+                'episodeShots': len(value['shots']), 'resolvedShotCount': count,
+                'adaptedDialogues': sum(x['dialogueSource'] == 'adapted' for x in value['shots']),
+                'sourceDialogues': 0, 'invalidSpeakersNormalized': invalid_speakers,
+                'deterministicShotPlan': True, 'planRevision': EPISODE_PLAN_REVISION,
+                'promptVersion': EPISODE_SHOT_PROMPT_VERSION,
+                'cache': {'planHit': plan_hit, 'shotHits': cache_hits, 'shotMisses': count - cache_hits},
+            }
             return value
         except (ValidationError, ValueError, TypeError) as exc:
             raise ComicAiError('AI_RESPONSE_INVALID') from exc
+        except TimeoutError as exc:
+            raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
+        except RuntimeError as exc:
+            raise ComicAiError(str(exc)) from exc

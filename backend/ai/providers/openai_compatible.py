@@ -49,7 +49,7 @@ Every source-grounded beat must reference only supplied sourceEvidenceIds. Retur
 
 def _adapt_settings(settings: dict[str, Any]) -> dict[str, Any]:
     keys = ('style', 'audience', 'language', 'level', 'educationGoals', 'fidelity', 'preserveCharacterNames',
-            'preserveCorePlot', 'preserveDialogue', 'shotCount', 'aspectRatio')
+            'preserveCorePlot', 'preserveDialogue', 'shotCount', 'autoShotCount', 'aspectRatio')
     return {key: settings.get(key) for key in keys}
 
 
@@ -196,7 +196,7 @@ class OpenAICompatibleComicProvider:
                              [page['image']], [page['page']])
 
     def plan_adaptation(self, context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-        purpose = (ADAPT_FACT_RULES + '\nStage 1: create a short story structure plan only. Produce 4-8 beats; do not generate shots, image prompts, video prompts, or character prompts.'
+        purpose = (ADAPT_FACT_RULES + '\nStage 1: classify the narrative type and create a concise story structure plan only. Produce the number of story beats required by the source (up to 16). Recommend a production shot count from 4-12 based on story complexity; story beats are not shots. Do not generate image prompts, video prompts, or character prompts.'
                    + self._schema_instruction('adaptation_plan'))
         return self._request(purpose, {'_schema': 'adaptation_plan', 'context': context, 'settings': _adapt_settings(settings)})
 
@@ -209,7 +209,7 @@ class OpenAICompatibleComicProvider:
             'characters': context.get('characters', []), 'keyDialogues': context.get('keyDialogues', []),
             'sourceEvidence': [item for item in context.get('sourceEvidence', []) if item.get('id') in used_ids],
         }
-        purpose = (ADAPT_FACT_RULES + '\nStage 2: turn the supplied plan into the final adapted story. storyBeats must contain exactly the requested shotCount. Do not generate Episode prompts.'
+        purpose = (ADAPT_FACT_RULES + '\nStage 2: turn the supplied plan into the final adapted story. Preserve the supplied plan beats one-to-one and keep their IDs; storyBeats are narrative beats, not production shots. Do not force storyBeats to match shotCount. Do not generate Episode prompts.'
                    + self._schema_instruction('adapted_story_draft'))
         return self._request(purpose, {'_schema': 'adapted_story_draft', 'plan': plan, 'context': compact, 'settings': _adapt_settings(settings)})
 
@@ -217,4 +217,16 @@ class OpenAICompatibleComicProvider:
         return self._request('Adapt this source analysis into a child-safe story. Clearly separate Source Facts from Adapted Content, preserve evidence mappings, and list every creative change in adaptationNotes.' + self._schema_instruction('adapted_story'), {'_schema': 'adapted_story', 'analysis': analysis, 'settings': settings})
 
     def generate_episode(self, story: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-        return self._request('Generate exactly the requested production Episode shots with grounded prompts and stable speaker keys. For Pre-A1 use 2-8 English words per line. imagePrompt must include stable character appearance, clothing, scene, composition, action start, and art style. videoPrompt must include action change, camera, environment motion, dialogue, and continuity.' + self._schema_instruction('episode'), {'_schema': 'episode', 'adaptedStory': story, 'settings': settings})
+        return self._request('Generate exactly the requested production Episode shots with grounded prompts and stable speaker keys. speaker must be exactly one characterDefinitions id, never a display name or a comma-separated group; when dialogueSource is none, speaker must be null and videoPrompt must not invent spoken dialogue. For Pre-A1 use 2-8 English words per spoken line. imagePrompt must include only supplied stable character appearance/clothing facts plus scene, composition, action start, and art style; do not invent unsupported identity details. videoPrompt must include action change, camera, environment motion, grounded dialogue when present, and continuity.' + self._schema_instruction('episode'), {'_schema': 'episode', 'adaptedStory': story, 'settings': settings})
+
+    def generate_episode_shot(self, slot: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        purpose = ('You are filling exactly one pre-planned shot. Do not add another shot. '
+                   'Do not change the shot id, source pages, or source evidence. Do not invent source evidence. '
+                   'Use only the supplied shot purpose, relevant story beats, characters, and scenes; do not borrow events from later shots. '
+                   'Give this shot a short, distinct title and do not repeat the story title. '
+                   'Speaker must be exactly one supplied character id or null; never return a name, unknown, or a group. '
+                   'For Pre-A1, keep spoken English to 2-8 words. If there is no grounded dialogue, use empty dialogue and null speaker. '
+                   'Return exactly one JSON object.' + self._schema_instruction('episode_shot_draft'))
+        safe_settings = {key: settings.get(key) for key in ('level', 'age', 'aspectRatio', 'style', 'language')}
+        return self._request(purpose, {'_schema': 'episode_shot_draft', 'shotSlot': slot,
+                                       'storyContext': context, 'settings': safe_settings})

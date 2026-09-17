@@ -281,7 +281,9 @@ class AdaptationPlan(BaseModel):
     ending: str
     conflict: str = 'unknown'
     resolution: str = 'unknown'
-    beats: list[AdaptationBeat] = Field(min_length=4, max_length=8)
+    narrativeType: str = 'narrative_story'
+    recommendedShotCount: int | None = Field(default=None, ge=1, le=12)
+    beats: list[AdaptationBeat] = Field(min_length=1, max_length=16)
     sourceEvidenceIds: list[str] = Field(default_factory=list)
     unassignedDialogue: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -293,7 +295,7 @@ class AdaptedStoryDraft(BaseModel):
     summary: str
     characters: list[dict[str, Any]]
     scenes: list[dict[str, Any]]
-    storyBeats: list[AdaptationBeat] = Field(min_length=1, max_length=12)
+    storyBeats: list[AdaptationBeat] = Field(min_length=1, max_length=16)
     ending: str
     learningGoals: list[str]
     sourceEvidenceIds: list[str] = Field(default_factory=list)
@@ -311,6 +313,8 @@ class AdaptedStory(BaseModel):
     learningGoals: list[str]
     sourceEvidence: list[SourceEvidence]
     adaptationNotes: list[str] = Field(default_factory=list)
+    narrativeType: str = 'narrative_story'
+    recommendedShotCount: int | None = Field(default=None, ge=1, le=12)
 
 
 class EpisodeCharacter(BaseModel):
@@ -329,6 +333,40 @@ class EpisodeScene(BaseModel):
     id: str
     description: str = ''
     location: str = 'unknown'
+
+
+class EpisodeShotSlot(BaseModel):
+    id: int = Field(ge=1)
+    beatIds: list[str] = Field(min_length=1)
+    purpose: str
+    sourcePages: list[int] = Field(min_length=1)
+    sourceEvidence: list[SourceEvidence]
+    characterIds: list[str] = Field(default_factory=list)
+    targetDuration: float = Field(gt=0, le=10)
+
+
+class EpisodeShotPlan(BaseModel):
+    shotCount: int = Field(ge=1, le=12)
+    shots: list[EpisodeShotSlot] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode='after')
+    def exact_contiguous_shots(self):
+        if len(self.shots) != self.shotCount:
+            raise ValueError('shot plan count mismatch')
+        if [item.id for item in self.shots] != list(range(1, self.shotCount + 1)):
+            raise ValueError('shot plan ids must be continuous')
+        return self
+
+
+class EpisodeShotDraft(BaseModel):
+    title: str
+    speaker: str | None = None
+    english: str = ''
+    chinese: str = ''
+    imagePrompt: str
+    videoPrompt: str
+    negativePrompt: str
+    durationSuggestion: float | None = None
 
 
 class EpisodeShot(BaseModel):

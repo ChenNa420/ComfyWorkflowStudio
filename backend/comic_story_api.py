@@ -50,6 +50,7 @@ class ComicAdaptRequest(BaseModel):
     preserveCorePlot: bool = True
     preserveDialogue: bool = False
     shotCount: int = Field(default=6, ge=1, le=12)
+    autoShotCount: bool = True
     aspectRatio: str = '9:16'
 
 
@@ -230,7 +231,7 @@ def _cache_target(analysis_id: str) -> Path:
 
 
 def _ai_error(exc: ComicAiError):
-    status = 409 if exc.code in {'AI_PROVIDER_DISABLED', 'AI_MODEL_NOT_CONFIGURED', 'AI_SEMANTIC_QUALITY_GATE_FAILED'} else 413 if exc.code == 'AI_CONTEXT_TOO_LARGE' else 502
+    status = 409 if exc.code in {'AI_PROVIDER_DISABLED', 'AI_MODEL_NOT_CONFIGURED', 'AI_SEMANTIC_QUALITY_GATE_FAILED'} else 413 if exc.code == 'AI_CONTEXT_TOO_LARGE' else 504 if exc.code == 'AI_REQUEST_TIMEOUT' else 502
     raise HTTPException(status_code=status, detail={'code': exc.code, 'message': str(exc)}) from exc
 
 
