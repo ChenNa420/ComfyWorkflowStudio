@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import fitz
 from pydantic import ValidationError
 
-from .models import SCHEMA_VERSION, SemanticAnalysis
+from backend.db import ROOT
+from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, Episode
+
+MAX_ARCHIVE_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 250 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 100
+_CACHE_LOCK = threading.Lock()
 
 
 ERROR_CODES = {
@@ -43,10 +52,14 @@ def _render_page(path: Path, page_number: int) -> bytes:
         return path.read_bytes()
     # Archives are already safely previewed by the API; Phase 1H-3 keeps the same
     # source registry and adds archive image extraction in one bounded operation.
-    import zipfile
     with zipfile.ZipFile(path) as archive:
-        names = sorted(n for n in archive.namelist() if Path(n).suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'})
-        return archive.read(names[page_number - 1])
+        infos = sorted((i for i in archive.infolist() if Path(i.filename).suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}), key=lambda i:i.filename)
+        total = sum(i.file_size for i in infos)
+        if total > MAX_ARCHIVE_TOTAL_BYTES: raise RuntimeError('COMIC_ARCHIVE_TOO_LARGE')
+        info = infos[page_number - 1]
+        if info.file_size > MAX_ARCHIVE_IMAGE_BYTES: raise RuntimeError('COMIC_ARCHIVE_TOO_LARGE')
+        if info.file_size / max(1, info.compress_size) > MAX_ARCHIVE_COMPRESSION_RATIO: raise RuntimeError('COMIC_ARCHIVE_UNSAFE')
+        return archive.read(info)
 
 
 def _context(result: dict[str, Any]) -> dict[str, Any]:
@@ -96,15 +109,31 @@ def merge_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
         if batch.get('visualStyle'): styles.append(batch['visualStyle'])
         if batch.get('storySummary'): summaries.append(batch['storySummary'])
     merged['visualStyle'] = styles[-1] if styles else {}
-    merged['storySummary'] = summaries[-1] if summaries else {}
-    merged['needsReview'] = any(bool(x.get('needsReview')) for x in batches) or any(c.get('needsReview') for c in merged['characters'])
+    if summaries:
+        first, last = summaries[0], summaries[-1]
+        middles = [s.get('middle') or s.get('premise') for s in summaries[1:-1] if s.get('middle') or s.get('premise')]
+        def non_unknown(key, reverse=False):
+            values = reversed(summaries) if reverse else summaries
+            return next((s.get(key) for s in values if s.get(key) not in {None, '', 'unknown'}), 'unknown')
+        merged['storySummary'] = {
+            'titleGuess': non_unknown('titleGuess'), 'premise': ' '.join(x for x in [first.get('premise',''), last.get('resolution','')] if x),
+            'beginning': first.get('beginning',''), 'middle': ' '.join(middles), 'ending': last.get('ending',''),
+            'conflict': non_unknown('conflict'), 'resolution': non_unknown('resolution', True),
+            'themes': list(dict.fromkeys(theme for s in summaries for theme in s.get('themes',[]))),
+            'tone': non_unknown('tone', True),
+        }
+        if len(summaries) > 1 and not merged['storySummary']['middle']:
+            merged['warnings'].append('story_summary_requires_review')
+            merged['needsReview'] = True
+    else: merged['storySummary'] = {}
+    merged['needsReview'] = merged.get('needsReview', False) or any(bool(x.get('needsReview')) for x in batches) or any(c.get('needsReview') for c in merged['characters'])
     return merged
 
 
 class ComicAiService:
-    def __init__(self, provider: Any, cache_dir: Path):
+    def __init__(self, provider: Any, cache_dir: Path | None = None):
         self.provider = provider
-        self.cache_dir = cache_dir
+        self.cache_dir = (cache_dir or ROOT / 'storage' / 'comic-analysis').resolve()
 
     def status(self) -> dict[str, Any]:
         return self.provider.get_status()
@@ -120,11 +149,16 @@ class ComicAiService:
         fingerprint = _file_fingerprint(path)
         key_input = {**fingerprint, 'pages': [p['page'] for p in pages], 'provider': status['provider'], 'model': status['model'], 'schema': SCHEMA_VERSION}
         analysis_id = hashlib.sha256(json.dumps(key_input, sort_keys=True).encode()).hexdigest()[:24]
-        target = self.cache_dir / f'{analysis_id}.json'
+        target = (self.cache_dir / f'{analysis_id}.json').resolve()
+        target.relative_to(self.cache_dir)
         if target.is_file() and not force_refresh:
-            result = json.loads(target.read_text(encoding='utf-8'))
-            result['cacheHit'] = True
-            return result
+            try:
+                result = json.loads(target.read_text(encoding='utf-8'))
+                SemanticAnalysis.model_validate(result)
+                result['cacheHit'] = True
+                return result
+            except (OSError, json.JSONDecodeError, ValidationError):
+                pass
         results: list[dict[str, Any]] = []
         prior: dict[str, Any] = {}
         try:
@@ -150,7 +184,12 @@ class ComicAiService:
                   'provider': status['provider'], 'model': status['model'], 'schemaVersion': SCHEMA_VERSION,
                   'cacheHit': False, 'batchCount': len(results)}
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+        encoded = json.dumps(result, ensure_ascii=False, indent=2)
+        with _CACHE_LOCK:
+            temp = target.with_suffix('.tmp')
+            with temp.open('w', encoding='utf-8') as stream:
+                stream.write(encoded); stream.flush(); os.fsync(stream.fileno())
+            os.replace(temp, target)
         return result
 
     def adapt(self, semantic: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
@@ -160,9 +199,7 @@ class ComicAiService:
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
         try:
-            result = self.provider.adapt_story(semantic, settings)
-            if not isinstance(result, dict): raise ValueError()
-            return result
+            return AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
         except TimeoutError as exc:
             raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
         except (ValueError, json.JSONDecodeError) as exc:
@@ -177,9 +214,6 @@ class ComicAiService:
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
         try:
-            value = self.provider.generate_episode(story, settings)
-            if not isinstance(value, dict): raise ValueError()
-            json.dumps(value)
-            return value
-        except (ValueError, TypeError) as exc:
+            return Episode.model_validate(self.provider.generate_episode(story, settings)).model_dump()
+        except (ValidationError, ValueError, TypeError) as exc:
             raise ComicAiError('AI_RESPONSE_INVALID') from exc

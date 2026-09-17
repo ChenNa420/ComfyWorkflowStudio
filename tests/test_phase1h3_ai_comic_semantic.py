@@ -43,9 +43,10 @@ class FakeProvider:
                 'ending': 'Friends smile.', 'learningGoals': settings.get('educationGoals', []),
                 'sourceEvidence': [{'sourcePage': 1, 'evidence': 'Hello'}]}
     def generate_episode(self, story, settings):
-        return {'title': story['title'], 'characters': ['character-01'], 'characterDefinitions': story['characters'],
+        return {'title': story['title'], 'level': 'Pre-A1', 'age': '3-8', 'duration': 5, 'aspectRatio': '9:16',
+                'characters': ['character-01'], 'characterDefinitions': story['characters'],
                 'scenes': story['scenes'], 'source': settings.get('source', {}),
-                'shots': [{'id': 1, 'speaker': 'character-01', 'english': 'Hello!', 'chinese': '你好！', 'duration': 5,
+                'shots': [{'id': 1, 'title': 'Greeting', 'speaker': 'character-01', 'english': 'Hello!', 'chinese': '你好！', 'duration': 5,
                            'imagePrompt': 'Round-faced child in a blue coat waves in the evidenced room.',
                            'videoPrompt': 'Medium shot; child raises one hand; coat and room remain consistent.',
                            'negativePrompt': 'identity drift, text artifacts', 'sourcePages': [1],

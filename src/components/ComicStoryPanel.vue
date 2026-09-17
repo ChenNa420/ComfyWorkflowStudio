@@ -27,6 +27,7 @@ const draft = ref<Draft|null>(null)
 const loading = ref('')
 const error = ref('')
 const copied = ref(false)
+const episodeValid = ref(false)
 const issueSearch = ref('')
 const issueYear = ref('')
 const provider = ref<any>({provider:'disabled',name:'disabled',enabled:false,configured:true,supportsVision:false,reason:''})
@@ -113,8 +114,19 @@ async function generateDraft(){
   loading.value='draft'; error.value=''
   try{
     draft.value=await postJson('/api/comic-story/draft',{token:selectedIssue.value.token,...story.value,startPage:startPage.value,endPage:endPage.value})
-    sessionStorage.setItem('cws-comic-story-episode',JSON.stringify(draft.value?.episode||{})); step.value=4
+    const serialized=JSON.stringify(draft.value?.episode||{}); JSON.parse(serialized); sessionStorage.setItem('cws-comic-story-episode',serialized); episodeValid.value=true; step.value=4
   }catch(value){error.value=value instanceof Error?value.message:'生成草稿失败'}finally{loading.value=''}
+}
+
+async function generateAiEpisode(){
+  if(!adapted.value || !semantic.value) return
+  loading.value='episode'; error.value=''
+  try{
+    const value=await postJson('/api/comic-story/generate-episode',{adaptedStory:adapted.value,settings:{source:semantic.value.source,level:story.value.level,age:story.value.audience,duration:story.value.duration,aspectRatio:story.value.aspectRatio}})
+    const serialized=JSON.stringify(value.episode); JSON.parse(serialized)
+    draft.value={generationMode:'ai-episode',requiresAiEnrichment:false,message:'AI Episode 已通过严格 Schema 校验。',episode:value.episode}
+    sessionStorage.setItem('cws-comic-story-episode',serialized); episodeValid.value=true; step.value=4
+  }catch(value){error.value=value instanceof Error?value.message:'正式 Episode 生成失败'}finally{loading.value=''}
 }
 
 function movePage(offset:number){
@@ -141,7 +153,7 @@ onMounted(loadSuggestedRoots)
 <template>
   <div class="comic-story-shell">
     <section class="comic-hero panel">
-      <div><span class="eyebrow">COMIC TO STORY · PHASE 1H-3</span><h2>漫画生成故事</h2><p>本地页面提取与可插拔视觉 AI 协作，证据优先地识别角色、场景、对白和剧情，再生成可追溯 Episode。</p></div>
+      <div><span class="eyebrow">COMIC TO STORY · PHASE 1H-3.1</span><h2>漫画生成故事</h2><p>本地页面提取与可插拔视觉 AI 协作，证据优先地识别角色、场景、对白和剧情，再生成可追溯 Episode。</p></div>
       <div class="hero-flow"><span>本地扫描</span><i></i><span>页面解析</span><i></i><span>故事改编</span><i></i><span>分镜草稿</span></div>
     </section>
 
@@ -197,14 +209,15 @@ onMounted(loadSuggestedRoots)
           <span class="eyebrow">STEP 3</span><h3>故事改编设置</h3>
           <div class="story-form"><label>故事标题<input v-model="story.title"/></label><label>故事风格<select v-model="story.style"><option>温馨治愈</option><option>轻松幽默</option><option>冒险成长</option><option>悬疑奇趣</option></select></label><label>目标受众<select v-model="story.audience"><option>3-8岁儿童</option><option>6-12岁儿童</option><option>青少年</option><option>全年龄</option></select></label><label>语言<select v-model="story.language"><option>中文（简体）</option><option>英语</option><option>中英双语</option></select></label><label>英语等级<select v-model="story.level"><option>Pre-A1</option><option>A1</option><option>A2</option></select></label><label>目标时长<input v-model.number="story.duration" type="number" min="5" max="600"/></label><label>原作忠实度<select v-model="story.fidelity"><option value="strict">高度忠实</option><option value="balanced">平衡</option><option value="free">自由改编</option></select></label><label>改编强度<select v-model="story.adaptationStrength"><option value="low">轻度</option><option value="medium">中度</option><option value="high">深度</option></select></label><label>镜头数量<select v-model.number="story.shotCount"><option :value="6">6 镜头</option><option :value="10">10 镜头</option><option :value="12">12 镜头</option></select></label><label>画幅<select v-model="story.aspectRatio"><option>9:16</option><option>16:9</option></select></label><label class="span-two">教育目标<input v-model="story.educationalGoal" placeholder="可留空，等待 AI Provider 补充"/></label><label class="check"><input v-model="story.preserveCharacterNames" type="checkbox"/>保留角色名</label><label class="check"><input v-model="story.preserveDialogues" type="checkbox"/>保留原对白</label><label class="check"><input v-model="story.autoShotCount" type="checkbox"/>AI 自动决定 Shot 数（Provider 启用后）</label></div>
           <button v-if="semantic" class="secondary wide generate" :disabled="loading==='adapt'" @click="adaptStory"><Sparkles :size="16"/>{{loading==='adapt'?'改编中…':adapted?'重新改编（不重复分析）':'生成 AI 改编'}}</button>
-          <button class="primary wide generate" :disabled="loading==='draft'" @click="generateDraft"><Sparkles :size="16"/>{{ loading==='draft'?'生成中...':'生成 Episode / Shot 结构草稿' }}</button>
+          <button v-if="adapted" class="primary wide generate" :disabled="loading==='episode'" @click="generateAiEpisode"><Sparkles :size="16"/>{{loading==='episode'?'生成中…':'生成正式 Episode'}}</button>
+          <button class="secondary wide generate" :disabled="loading==='draft'" @click="generateDraft"><Sparkles :size="16"/>{{ loading==='draft'?'生成中...':'生成 Local Scaffold' }}</button>
         </article>
         <article class="panel comic-stage extracted-copy"><span class="eyebrow">SOURCE VS ADAPTATION</span><h3>原作分析 vs 改编结果</h3><p class="source-note">页码：{{ analysis.selectedPages[0] }}–{{ analysis.selectedPages[analysis.selectedPages.length-1] }} · {{ analysis.analysisMode }}</p><div class="source-text"><b>原作摘要</b>\n{{semantic?.storySummary?.premise || analysis.textExcerpt || '当前页面没有文本层。'}}\n\n<b>改编故事</b>\n{{adapted?.summary || adapted?.logline || '运行 AI 语义分析后，可独立执行改编。'}}</div></article>
       </section>
     </template>
 
     <template v-else-if="step===4 && draft">
-      <section class="result-banner panel"><div class="success-mark"><CircleCheck :size="24"/></div><div><h3>Episode 结构草稿已生成</h3><p>{{ draft.message }}</p></div><span class="warning-chip">需要 AI 语义增强</span></section>
+      <section class="result-banner panel"><div class="success-mark"><CircleCheck :size="24"/></div><div><h3>{{draft.generationMode==='ai-episode'?'AI Episode Ready':'Local Scaffold Ready'}}</h3><p>{{ draft.message }}</p></div><span class="warning-chip">{{episodeValid?'Episode JSON Valid':'校验失败'}}</span></section>
       <section class="result-grid">
         <article class="panel comic-stage"><div class="section-head"><div><span class="eyebrow">STORYBOARD</span><h3>{{ draft.episode.title }}</h3></div><span class="badge">{{ draft.episode.shots.length }} Shots</span></div><div class="shot-cards"><article v-for="shot in draft.episode.shots" :key="shot.id"><img :src="`/api/comic-story/page/${draft.episode.source.fileToken}/${shot.sourcePage}`"/><div><b>Shot {{ String(shot.id).padStart(2,'0') }} · 第 {{ shot.sourcePage }} 页</b><p>{{ shot.english || shot.chinese || '等待 AI 根据画面补充剧情与对白。' }}</p><small>{{ shot.duration }} 秒 · {{ draft.episode.aspectRatio }} · {{shot.dialogueSource||'pending'}}</small></div></article></div></article>
         <article class="panel comic-stage json-panel"><div class="section-head"><div><span class="eyebrow">EPISODE JSON</span><h3>结构化输出</h3></div><div class="json-actions"><button class="secondary" @click="copyJson">{{ copied?'已复制':'复制 JSON' }}</button><button class="primary" @click="downloadJson">下载</button><Braces :size="22"/></div></div><pre>{{ jsonText }}</pre></article>

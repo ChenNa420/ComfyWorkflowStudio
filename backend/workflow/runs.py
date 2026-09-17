@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +9,7 @@ from backend.db import Database
 from backend.models import GenerationTaskCreate
 from backend.workflow.pilot import ACTIVE, PilotRejected, _manifest, validate_pilot
 
-_RUN_GATE = threading.Lock()
+from backend.workflow.execution_gate import EXECUTION_CREATE_LOCK
 
 
 def run_schema(db: Database, workflow_id: str) -> dict[str, Any]:
@@ -34,7 +33,7 @@ def run_schema(db: Database, workflow_id: str) -> dict[str, Any]:
 
 
 def create_run(db: Database, workflow_id: str, payload: GenerationTaskCreate) -> str:
-    with _RUN_GATE:
+    with EXECUTION_CREATE_LOCK:
         validated = validate_pilot(db, workflow_id, payload.inputs)
         with db.connect() as conn:
             marks = ','.join('?' for _ in ACTIVE)

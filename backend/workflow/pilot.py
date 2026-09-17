@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from typing import Any
 
 from backend.comfy.runtime import create_task, start_task
@@ -10,7 +9,7 @@ from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.preflight import PREFLIGHT_CERTIFIED, preflight_detail
 
 ACTIVE = ('WAITING', 'PREPARING', 'SUBMITTING', 'QUEUED', 'RUNNING')
-_PILOT_GATE = threading.Lock()
+from backend.workflow.execution_gate import EXECUTION_CREATE_LOCK
 
 
 class PilotRejected(ValueError):
@@ -44,7 +43,7 @@ def validate_pilot(db: Database, workflow_id: str, inputs: dict[str, Any]) -> di
 
 
 def create_pilot(db: Database, workflow_id: str, payload: GenerationTaskCreate) -> str:
-    with _PILOT_GATE:
+    with EXECUTION_CREATE_LOCK:
         validated = validate_pilot(db, workflow_id, payload.inputs)
         with db.connect() as conn:
             marks = ','.join('?' for _ in ACTIVE)

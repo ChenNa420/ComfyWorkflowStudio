@@ -12,6 +12,7 @@ import fitz
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from backend.db import ROOT
 from backend.ai.providers import get_comic_ai_provider
 from backend.ai.service import ComicAiError, ComicAiService
 
@@ -215,7 +216,17 @@ def _first_sentence(text: str) -> str:
 
 
 def _service():
-    return ComicAiService(get_comic_ai_provider(), Path('storage/comic-analysis'))
+    return ComicAiService(get_comic_ai_provider(), ROOT / 'storage' / 'comic-analysis')
+
+
+def _cache_target(analysis_id: str) -> Path:
+    if not re.fullmatch(r'[a-f0-9]{24}', analysis_id):
+        raise HTTPException(status_code=400, detail={'code': 'INVALID_SEMANTIC_ANALYSIS_ID'})
+    root = (ROOT / 'storage' / 'comic-analysis').resolve()
+    target = (root / f'{analysis_id}.json').resolve()
+    try: target.relative_to(root)
+    except ValueError as exc: raise HTTPException(status_code=400, detail={'code': 'INVALID_SEMANTIC_ANALYSIS_ID'}) from exc
+    return target
 
 
 def _ai_error(exc: ComicAiError):
@@ -306,7 +317,14 @@ def comic_story_router() -> APIRouter:
                     if page_number > len(names):
                         raise HTTPException(status_code=404, detail='comic_page_not_found')
                     name = names[page_number - 1]
-                    data = archive.read(name)
+                    info = archive.getinfo(name)
+                    from backend.ai.service import MAX_ARCHIVE_IMAGE_BYTES, MAX_ARCHIVE_TOTAL_BYTES, MAX_ARCHIVE_COMPRESSION_RATIO
+                    infos = [archive.getinfo(n) for n in names]
+                    if sum(i.file_size for i in infos) > MAX_ARCHIVE_TOTAL_BYTES or info.file_size > MAX_ARCHIVE_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail='COMIC_ARCHIVE_TOO_LARGE')
+                    if info.file_size / max(1, info.compress_size) > MAX_ARCHIVE_COMPRESSION_RATIO:
+                        raise HTTPException(status_code=422, detail='COMIC_ARCHIVE_UNSAFE')
+                    data = archive.read(info)
                     media_type = mimetypes.guess_type(name)[0] or 'image/jpeg'
                     return Response(data, media_type=media_type)
             except zipfile.BadZipFile as exc:
@@ -321,7 +339,6 @@ def comic_story_router() -> APIRouter:
         words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", combined)
         common = [word for word, _ in Counter(word.lower() for word in words).most_common(12)]
         provider = get_comic_ai_provider()
-        semantic = provider.analyze_comic_pages(pages)
         return {
             'token': payload.token,
             'sourceName': path.stem,
@@ -333,7 +350,7 @@ def comic_story_router() -> APIRouter:
             'analysisMode': 'local-source-extraction',
             'aiReady': False,
             'provider': {'name': provider.name, 'enabled': provider.enabled},
-            'semanticAnalysis': semantic,
+            'semanticAnalysis': {'status': 'pending', 'characters': [], 'scenes': [], 'dialogues': [], 'plotEvents': [], 'props': [], 'locations': []},
             'requiresAiEnrichment': not provider.enabled,
             'message': '已完成本地页面与文本提取；角色、场景、剧情语义分析将在 AI Provider 接入后增强。',
         }
@@ -351,7 +368,7 @@ def comic_story_router() -> APIRouter:
 
     @router.post('/adapt-story')
     def adapt_story(payload: ComicAdaptRequest):
-        cache = Path('storage/comic-analysis') / f'{payload.semanticAnalysisId}.json'
+        cache = _cache_target(payload.semanticAnalysisId)
         if not cache.is_file():
             raise HTTPException(status_code=404, detail={'code': 'SEMANTIC_ANALYSIS_NOT_FOUND'})
         try:
@@ -390,13 +407,13 @@ def comic_story_router() -> APIRouter:
                 'videoPrompt': f'Animate the scene from comic page {source["page"]} with restrained natural motion and consistent characters.',
                 'negativePrompt': 'character drift, extra limbs, duplicated props, text artifacts, watermark',
                 'sourcePages': [source['page']],
-                'dialogueSource': 'source' if source_text else 'pending',
+                'dialogueSource': 'source' if source_text else 'none',
             })
 
         episode_shots = []
         for shot in shots:
             source_text = shot.pop('sourceText')
-            episode_shots.append({**shot, 'speaker': '', 'sourceEvidence': {'page': shot['sourcePage'], 'text': source_text}})
+            episode_shots.append({**shot, 'speaker': None, 'sourceEvidence': [{'sourcePage': shot['sourcePage'], 'evidence': source_text}]})
 
         provider = get_comic_ai_provider()
         return {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +12,6 @@ from fastapi.responses import FileResponse
 from backend.bindings import bindings_router
 from backend.comic_story_api import comic_story_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
-from backend.comfy.runtime import create_task as create_generation_task
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
 from backend.workflow.catalog import import_payload
@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
             'phase': '1H',
-            'subphase': '1H-3',
+            'subphase': '1H-3.1',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,
@@ -186,7 +186,15 @@ def create_app() -> FastAPI:
 
     @app.post('/api/materials')
     async def upload_material(file: UploadFile = File(...), material_type: str | None = None):
-        raw = await file.read()
+        limit = max(1, int(os.getenv('CWS_MAX_MATERIAL_MB', '100'))) * 1024 * 1024
+        chunks, total = [], 0
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk: break
+            total += len(chunk)
+            if total > limit: raise HTTPException(status_code=413, detail='MATERIAL_TOO_LARGE')
+            chunks.append(chunk)
+        raw = b''.join(chunks)
         if not raw:
             raise HTTPException(status_code=400, detail='empty_file')
         filename = Path(file.filename or 'material.bin').name
@@ -213,11 +221,8 @@ def create_app() -> FastAPI:
 
     @app.post('/api/tasks')
     def create_task(payload: GenerationTaskCreate):
-        try:
-            task_id = create_generation_task(db, payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {'taskId': task_id, 'status': 'WAITING'}
+        del payload
+        raise HTTPException(status_code=410, detail={'code': 'LEGACY_TASK_API_DISABLED', 'message': 'Use /api/workflows/{id}/runs'})
 
     @app.get('/api/tasks')
     def list_tasks(limit: int = 100):
