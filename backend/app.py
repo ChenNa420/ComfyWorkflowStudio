@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
             'status': 'ok',
             'service': 'ComfyWorkflowStudio',
             'phase': '1H',
-            'subphase': '1H-3.1',
+            'subphase': '1H-4',
             'workflowPackages': len(manifests),
             'runningTasks': running,
             'outputs': outputs,

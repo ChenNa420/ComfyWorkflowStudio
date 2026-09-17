@@ -24,6 +24,7 @@ ERROR_CODES = {
     'AI_PROVIDER_DISABLED', 'AI_PROVIDER_UNAVAILABLE', 'AI_MODEL_NOT_CONFIGURED',
     'AI_MODEL_VISION_UNSUPPORTED', 'AI_RESPONSE_INVALID', 'AI_REQUEST_TIMEOUT',
     'AI_CONTEXT_TOO_LARGE',
+    'AI_EVIDENCE_OUT_OF_RANGE',
 }
 
 
@@ -42,14 +43,18 @@ def _file_fingerprint(path: Path) -> dict[str, Any]:
     return {'sha256': digest.hexdigest(), 'size': stat.st_size, 'mtimeNs': stat.st_mtime_ns}
 
 
-def _render_page(path: Path, page_number: int) -> bytes:
+def _render_page(path: Path, page_number: int, longest_edge: int = 1280) -> tuple[bytes, dict[str, Any]]:
     if path.suffix.lower() == '.pdf':
         with fitz.open(path) as doc:
             page = doc.load_page(page_number - 1)
-            scale = min(1.6, 1600 / max(page.rect.width, page.rect.height))
-            return page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes('jpeg', jpg_quality=78)
+            scale = longest_edge / max(page.rect.width, page.rect.height)
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            raw = pix.tobytes('jpeg', jpg_quality=82)
+            return raw, {'originalWidth': round(page.rect.width, 2), 'originalHeight': round(page.rect.height, 2),
+                         'inputWidth': pix.width, 'inputHeight': pix.height, 'jpegBytes': len(raw)}
     if path.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'} and page_number == 1:
-        return path.read_bytes()
+        raw = path.read_bytes()
+        return raw, {'originalWidth': None, 'originalHeight': None, 'inputWidth': None, 'inputHeight': None, 'jpegBytes': len(raw)}
     # Archives are already safely previewed by the API; Phase 1H-3 keeps the same
     # source registry and adds archive image extraction in one bounded operation.
     with zipfile.ZipFile(path) as archive:
@@ -59,7 +64,34 @@ def _render_page(path: Path, page_number: int) -> bytes:
         info = infos[page_number - 1]
         if info.file_size > MAX_ARCHIVE_IMAGE_BYTES: raise RuntimeError('COMIC_ARCHIVE_TOO_LARGE')
         if info.file_size / max(1, info.compress_size) > MAX_ARCHIVE_COMPRESSION_RATIO: raise RuntimeError('COMIC_ARCHIVE_UNSAFE')
-        return archive.read(info)
+        raw = archive.read(info)
+        return raw, {'originalWidth': None, 'originalHeight': None, 'inputWidth': None, 'inputHeight': None, 'jpegBytes': len(raw)}
+
+
+def validate_evidence_pages(value: dict[str, Any], allowed: set[int]) -> None:
+    found: list[int] = []
+    for character in value.get('characters', []):
+        found.extend([character.get('firstSeenPage'), *character.get('pages', [])])
+        found.extend(x.get('sourcePage') for x in character.get('evidence', []))
+    for key in ('scenes', 'plotEvents'):
+        for item in value.get(key, []):
+            found.extend(item.get('pages', [])); found.extend(x.get('sourcePage') for x in item.get('evidence', []))
+    for item in value.get('dialogues', []): found.append(item.get('page'))
+    for key in ('props', 'locations'):
+        for item in value.get(key, []): found.extend(item.get('pages', []))
+    invalid = sorted({page for page in found if isinstance(page, int) and page not in allowed})
+    if invalid: raise ComicAiError('AI_EVIDENCE_OUT_OF_RANGE', f'Invalid evidence pages: {invalid}')
+
+
+def quality_summary(value: dict[str, Any], selected: list[int]) -> dict[str, Any]:
+    characters, dialogues = value.get('characters', []), value.get('dialogues', [])
+    evidence_count = sum(len(x.get('evidence', [])) for key in ('characters','scenes','plotEvents') for x in value.get(key, []))
+    return {'selectedPages': selected, 'charactersDetected': len(characters),
+            'charactersNeedingReview': sum(bool(x.get('needsReview')) for x in characters),
+            'dialoguesDetected': len(dialogues), 'speakerResolved': sum(x.get('speakerId') is not None for x in dialogues),
+            'speakerUnknown': sum(x.get('speakerId') is None for x in dialogues), 'scenesDetected': len(value.get('scenes', [])),
+            'plotEventsDetected': len(value.get('plotEvents', [])), 'evidenceCount': evidence_count,
+            'evidenceInvalid': 0, 'semanticWarnings': len(value.get('warnings', []))}
 
 
 def _context(result: dict[str, Any]) -> dict[str, Any]:
@@ -138,14 +170,25 @@ class ComicAiService:
     def status(self) -> dict[str, Any]:
         return self.provider.get_status()
 
+    def probe(self) -> dict[str, Any]:
+        status = self.status()
+        if not status.get('enabled'): raise ComicAiError('AI_PROVIDER_DISABLED')
+        if not status.get('configured'): raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
+        try: return self.provider.probe()
+        except TimeoutError as exc: raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
+        except (RuntimeError, ValueError) as exc: raise ComicAiError(str(exc)) from exc
+
     def analyze(self, path: Path, token: str, pages: list[dict[str, Any]], force_refresh: bool = False) -> dict[str, Any]:
         status = self.status()
         if not status['enabled']:
             raise ComicAiError('AI_PROVIDER_DISABLED')
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
-        if len(pages) > 12:
-            raise ComicAiError('AI_CONTEXT_TOO_LARGE', 'A maximum of 12 pages may be analyzed at once')
+        maximum = max(1, min(12, int(os.getenv('COMIC_AI_MAX_REAL_PAGES', '4'))))
+        if len(pages) > maximum:
+            raise ComicAiError('AI_CONTEXT_TOO_LARGE', f'A maximum of {maximum} real pages may be analyzed at once')
+        profile = os.getenv('COMIC_AI_IMAGE_PROFILE', 'standard').strip().lower()
+        edge = 1600 if profile == 'high' else 1280
         fingerprint = _file_fingerprint(path)
         key_input = {**fingerprint, 'pages': [p['page'] for p in pages], 'provider': status['provider'], 'model': status['model'], 'schema': SCHEMA_VERSION}
         analysis_id = hashlib.sha256(json.dumps(key_input, sort_keys=True).encode()).hexdigest()[:24]
@@ -160,14 +203,18 @@ class ComicAiService:
             except (OSError, json.JSONDecodeError, ValidationError):
                 pass
         results: list[dict[str, Any]] = []
+        request_retries = 0
         prior: dict[str, Any] = {}
         try:
             for offset in range(0, len(pages), 4):
                 batch = []
                 for page in pages[offset:offset + 4]:
-                    batch.append({**page, 'image': _render_page(path, page['page'])})
+                    image, image_meta = _render_page(path, page['page'], edge)
+                    batch.append({**page, 'image': image, 'imageMeta': image_meta})
                 raw = self.provider.analyze_comic_pages(batch, prior)
+                request_retries += int(raw.pop('_requestRetries', 0))
                 validated = SemanticAnalysis.validate_provider(raw).model_dump()
+                validate_evidence_pages(validated, {p['page'] for p in batch})
                 results.append(validated)
                 prior = _context(validated)
             merged = SemanticAnalysis.validate_provider(merge_batches(results)).model_dump()
@@ -179,10 +226,16 @@ class ComicAiService:
             raise
         except RuntimeError as exc:
             raise ComicAiError(str(exc)) from exc
+        selected = [p['page'] for p in pages]
         result = {**merged, 'id': analysis_id,
                   'source': {'type': 'comic', 'name': path.name, 'fileToken': token, 'pages': [p['page'] for p in pages]},
                   'provider': status['provider'], 'model': status['model'], 'schemaVersion': SCHEMA_VERSION,
-                  'cacheHit': False, 'batchCount': len(results)}
+                  'cacheHit': False, 'batchCount': len(results), 'imageProfile': profile,
+                  'renderMetrics': [p['imageMeta'] | {'page': p['page']} for p in batch] if len(results)==1 else [],
+                  'qualitySummary': quality_summary(merged, selected), 'requestRetries': request_retries}
+        result['qualitySummary'].update({'charactersBeforeMerge': sum(len(x.get('characters', [])) for x in results),
+                                         'charactersAfterMerge': len(merged.get('characters', []))})
+        if request_retries: result['warnings'].append(f'provider_network_retried:{request_retries}')
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(result, ensure_ascii=False, indent=2)
         with _CACHE_LOCK:
@@ -199,7 +252,9 @@ class ComicAiService:
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
         try:
-            return AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
+            value = AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
+            value['qualitySummary'] = {'adaptationNotes': len(value['adaptationNotes'])}
+            return value
         except TimeoutError as exc:
             raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
         except (ValueError, json.JSONDecodeError) as exc:
@@ -214,6 +269,10 @@ class ComicAiService:
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
         try:
-            return Episode.model_validate(self.provider.generate_episode(story, settings)).model_dump()
+            value = Episode.model_validate(self.provider.generate_episode(story, settings)).model_dump()
+            expected = settings.get('shotCount')
+            if expected and len(value['shots']) != int(expected): raise ComicAiError('AI_RESPONSE_INVALID', 'Episode shot count does not match request')
+            value['qualitySummary'] = {'episodeShots': len(value['shots']), 'adaptedDialogues': sum(x['dialogueSource']=='adapted' for x in value['shots']), 'sourceDialogues': sum(x['dialogueSource']=='source' for x in value['shots'])}
+            return value
         except (ValidationError, ValueError, TypeError) as exc:
             raise ComicAiError('AI_RESPONSE_INVALID') from exc

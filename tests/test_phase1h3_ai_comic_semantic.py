@@ -83,7 +83,8 @@ class Phase1H3Tests(unittest.TestCase):
         self.assertNotIn('secret', str(status)); self.assertNotIn('top-secret', str(status))
 
     def test_batch_schema_evidence_unknown_merge_and_cache(self):
-        first = self.service.analyze(self.pdf, 'safe-token', self.pages)
+        with patch.dict(os.environ, {'COMIC_AI_MAX_REAL_PAGES': '12'}):
+            first = self.service.analyze(self.pdf, 'safe-token', self.pages)
         self.assertEqual(first['batchCount'], 3); self.assertEqual(len(self.provider.calls), 3)
         self.assertTrue(self.provider.calls[1][1]['knownCharacters'])
         self.assertEqual(len(first['characters']), 1)
@@ -91,7 +92,8 @@ class Phase1H3Tests(unittest.TestCase):
         self.assertEqual(first['characters'][0]['pages'], [1, 5, 9])
         self.assertEqual(first['dialogues'][0]['speakerId'], None)
         self.assertEqual(first['source'], {'type': 'comic', 'name': 'comic.pdf', 'fileToken': 'safe-token', 'pages': list(range(1, 10))})
-        second = self.service.analyze(self.pdf, 'safe-token', self.pages)
+        with patch.dict(os.environ, {'COMIC_AI_MAX_REAL_PAGES': '12'}):
+            second = self.service.analyze(self.pdf, 'safe-token', self.pages)
         self.assertTrue(second['cacheHit']); self.assertEqual(len(self.provider.calls), 3)
 
     def test_cache_invalidates_when_source_changes(self):

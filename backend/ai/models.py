@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
-SCHEMA_VERSION = "1h3-v1"
+SCHEMA_VERSION = "1h4-v1"
 
 
 class Evidence(BaseModel):
@@ -139,12 +139,19 @@ class AdaptedStory(BaseModel):
     ending: str
     learningGoals: list[str]
     sourceEvidence: list[SourceEvidence]
+    adaptationNotes: list[str] = Field(default_factory=list)
 
 
 class EpisodeCharacter(BaseModel):
     id: str
     name: str = 'unknown'
     description: str = ''
+    appearance: str = ''
+    clothing: str = ''
+    bodyType: str = 'unknown'
+    accessories: list[str] = Field(default_factory=list)
+    prompt: str = ''
+    negativePrompt: str = 'identity drift, inconsistent clothing, extra limbs'
 
 
 class EpisodeScene(BaseModel):
@@ -197,4 +204,9 @@ class Episode(BaseModel):
         keys = {item.id for item in self.characterDefinitions}
         if any(shot.speaker is not None and shot.speaker not in keys for shot in self.shots):
             raise ValueError('speaker must reference characterDefinitions')
+        allowed = set(self.source.pages)
+        if any(page not in allowed for shot in self.shots for page in shot.sourcePages):
+            raise ValueError('shot sourcePages must reference Episode source pages')
+        if any(item.sourcePage not in allowed for shot in self.shots for item in shot.sourceEvidence):
+            raise ValueError('shot sourceEvidence must reference Episode source pages')
         return self

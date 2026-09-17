@@ -36,8 +36,9 @@ const adapted = ref<any>(null)
 
 const story = ref({ title:'', style:'温馨治愈', audience:'3-8岁儿童', language:'中文（简体）', shotCount:6, aspectRatio:'9:16', level:'Pre-A1', duration:30, fidelity:'balanced', adaptationStrength:'medium', educationalGoal:'', preserveCharacterNames:true, preserveDialogues:true, autoShotCount:false })
 const previewUrl = computed(() => selectedIssue.value ? `/api/comic-story/page/${selectedIssue.value.token}/${currentPage.value}` : '')
-const canAnalyze = computed(() => !!selectedIssue.value && startPage.value >= 1 && endPage.value >= startPage.value && endPage.value-startPage.value<12)
+const canAnalyze = computed(() => !!selectedIssue.value && startPage.value >= 1 && endPage.value >= startPage.value && endPage.value-startPage.value<4)
 const providerReady = computed(()=>provider.value.enabled && provider.value.configured)
+const quality = computed(()=>semantic.value?.qualitySummary||null)
 const jsonText = computed(() => draft.value ? JSON.stringify(draft.value.episode, null, 2) : '')
 const issueYears = computed(()=>Array.from(new Set(issues.value.map(x=>(x.filename.match(/(?:19|20)\d{2}/)||[])[0]).filter(Boolean))).sort().reverse())
 const filteredIssues = computed(()=>issues.value.filter(item=>{const needle=issueSearch.value.trim().toLowerCase();const year=(item.filename.match(/(?:19|20)\d{2}/)||[])[0]||'';return(!needle||`${item.name} ${item.filename} ${item.folder||''}`.toLowerCase().includes(needle))&&(!issueYear.value||year===issueYear.value)}))
@@ -82,8 +83,14 @@ async function chooseCollection(item:Collection){
 }
 
 function chooseIssue(item:Issue){
-  selectedIssue.value=item; currentPage.value=1; startPage.value=1; endPage.value=Math.min(item.pageCount||10,10)
+  selectedIssue.value=item; currentPage.value=1; startPage.value=1; endPage.value=Math.min(item.pageCount||4,4)
   analysis.value=null; semantic.value=null; adapted.value=null; draft.value=null; story.value.title=item.name; step.value=2
+}
+
+async function probeProvider(){
+  if(!providerReady.value)return
+  loading.value='probe'; error.value=''
+  try{provider.value=await postJson('/api/comic-story/ai/probe',{})}catch(value){error.value=value instanceof Error?value.message:'Provider Probe 失败'}finally{loading.value=''}
 }
 
 async function semanticAnalyze(){
@@ -105,7 +112,7 @@ async function analyze(){
   loading.value='analyze'; error.value=''
   try{
     analysis.value=await postJson('/api/comic-story/analyze',{token:selectedIssue.value.token,startPage:startPage.value,endPage:endPage.value})
-    story.value.title=story.value.title || analysis.value?.sourceName || ''; step.value=3
+    story.value.title=story.value.title || analysis.value?.sourceName || ''
   }catch(value){error.value=value instanceof Error?value.message:'解析失败'}finally{loading.value=''}
 }
 
@@ -122,7 +129,7 @@ async function generateAiEpisode(){
   if(!adapted.value || !semantic.value) return
   loading.value='episode'; error.value=''
   try{
-    const value=await postJson('/api/comic-story/generate-episode',{adaptedStory:adapted.value,settings:{source:semantic.value.source,level:story.value.level,age:story.value.audience,duration:story.value.duration,aspectRatio:story.value.aspectRatio}})
+    const value=await postJson('/api/comic-story/generate-episode',{adaptedStory:adapted.value,settings:{source:semantic.value.source,level:story.value.level,age:story.value.audience,duration:story.value.duration,aspectRatio:story.value.aspectRatio,shotCount:story.value.shotCount}})
     const serialized=JSON.stringify(value.episode); JSON.parse(serialized)
     draft.value={generationMode:'ai-episode',requiresAiEnrichment:false,message:'AI Episode 已通过严格 Schema 校验。',episode:value.episode}
     sessionStorage.setItem('cws-comic-story-episode',serialized); episodeValid.value=true; step.value=4
@@ -153,7 +160,7 @@ onMounted(loadSuggestedRoots)
 <template>
   <div class="comic-story-shell">
     <section class="comic-hero panel">
-      <div><span class="eyebrow">COMIC TO STORY · PHASE 1H-3.1</span><h2>漫画生成故事</h2><p>本地页面提取与可插拔视觉 AI 协作，证据优先地识别角色、场景、对白和剧情，再生成可追溯 Episode。</p></div>
+      <div><span class="eyebrow">COMIC TO STORY · PHASE 1H-4</span><h2>漫画生成故事</h2><p>本地页面提取与可插拔视觉 AI 协作，证据优先地识别角色、场景、对白和剧情，再生成可追溯 Episode。</p></div>
       <div class="hero-flow"><span>本地扫描</span><i></i><span>页面解析</span><i></i><span>故事改编</span><i></i><span>分镜草稿</span></div>
     </section>
 
@@ -196,9 +203,12 @@ onMounted(loadSuggestedRoots)
           <span class="eyebrow">SOURCE ANALYSIS</span><h3>解析与分析漫画</h3><p>先完成只读本地提取，再按需调用已显式配置的 Vision Provider。一次最多 12 页，每 4 页分批并携带前批上下文。</p>
           <div class="range-grid"><label>起始页<input v-model.number="startPage" type="number" min="1"/></label><label>结束页<input v-model.number="endPage" type="number" min="1" :max="selectedIssue.pageCount||999"/></label></div>
           <button class="primary wide" :disabled="loading==='analyze'||!canAnalyze" @click="analyze"><ScanText :size="16"/><span>{{ loading==='analyze'?'解析中...':'解析选中页面' }}</span></button>
-          <div class="provider-state">AI Provider：<b>{{provider.provider||provider.name}}</b> · {{providerReady?'已连接':provider.enabled?'配置错误':'未启用'}}<span v-if="provider.model"> · {{provider.model}}</span><small v-if="provider.reason">{{provider.reason}}</small></div>
+          <div class="provider-state">AI Provider：<b>{{provider.provider||provider.name}}</b> · {{providerReady?'已配置':provider.enabled?'配置错误':'未启用'}}<span v-if="provider.model"> · {{provider.model}}</span><small v-if="provider.reason">{{provider.reason}}</small><small>Probe：{{provider.visionVerified&&provider.structuredOutputVerified?'Vision + JSON 已验证':'尚未验证'}}</small></div>
+          <button class="secondary wide ai-button" :disabled="!providerReady||loading==='probe'" @click="probeProvider">{{loading==='probe'?'Probe 中…':'运行安全 Provider Probe'}}</button>
           <button class="secondary wide ai-button" :disabled="!providerReady||!analysis||loading==='semantic'" @click="semanticAnalyze"><Sparkles :size="16"/>{{loading==='semantic'?'AI 分析中…':'运行 AI 语义分析'}}</button>
           <div v-if="analysis" class="analysis-result"><div class="ok-line"><CircleCheck :size="17"/>页面解析完成</div><div class="tag-row"><span v-for="key in analysis.keywords" :key="key">{{ key }}</span></div><p>{{ analysis.message }}</p><div class="semantic-grid"><div v-for="key in ['characters','scenes','dialogues','plotEvents','visualStyle','props','locations','storySummary']" :key="key"><b>{{key}}</b><span>{{semantic ? (Array.isArray(semantic[key])?`${semantic[key].length} 项`:'已完成') : '等待 AI 语义分析'}}</span><div v-if="semantic && Array.isArray(semantic[key])" class="evidence-chips"><button v-for="page in [...new Set(semantic[key].flatMap((x:any)=>x.pages||[x.page]).filter(Boolean))].slice(0,6)" :key="page" @click="currentPage=page">P{{page}}</button></div></div></div></div>
+          <section v-if="semantic" class="quality-review"><span class="eyebrow">AI QUALITY REVIEW</span><h3>AI 质量审查</h3><div v-if="quality" class="quality-metrics"><span>页 {{quality.selectedPages?.join(', ')}}</span><span>角色 {{quality.charactersDetected}}（合并前 {{quality.charactersBeforeMerge}} / 后 {{quality.charactersAfterMerge}}）</span><span>需审查 {{quality.charactersNeedingReview}}</span><span>对白 {{quality.dialoguesDetected}}</span><span>Speaker {{quality.speakerResolved}} / Unknown {{quality.speakerUnknown}}</span><span>场景 {{quality.scenesDetected}}</span><span>事件 {{quality.plotEventsDetected}}</span><span>Evidence {{quality.evidenceCount}} / Invalid {{quality.evidenceInvalid}}</span><span>Warnings {{quality.semanticWarnings}}</span></div><h4>Character Identity</h4><article v-for="item in semantic.characters" :key="item.id"><b>{{item.id}} · {{item.name}}</b><span :class="['confidence-badge',item.confidence>=.75?'high':item.confidence>=.45?'medium':'low']">{{item.confidence>=.75?'High':item.confidence>=.45?'Medium':'Low'}}</span><p>{{item.appearance}} · {{item.clothing}}</p><div class="evidence-chips"><button v-for="page in item.pages" :key="page" @click="currentPage=page">P{{page}}</button></div></article><h4>Dialogue & Evidence</h4><article v-for="(item,index) in semantic.dialogues" :key="index"><b>P{{item.page}} · {{item.speakerId||'Unknown'}}</b><span :class="['confidence-badge',item.confidence>=.75?'high':item.confidence>=.45?'medium':'low']">{{item.confidence>=.75?'High':item.confidence>=.45?'Medium':'Low'}}</span><p>{{item.text}}</p><button class="evidence-link" @click="currentPage=item.page">查看 Evidence P{{item.page}}</button></article><div v-if="semantic.warnings?.length" class="quality-warnings"><b>Warnings</b><p v-for="warning in semantic.warnings" :key="warning">{{warning}}</p></div></section>
+          <button v-if="analysis" class="primary wide ai-button" @click="step=3">继续故事改编</button>
         </article>
       </section>
     </template>
@@ -239,5 +249,6 @@ onMounted(loadSuggestedRoots)
 .page-layout{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px;margin-top:12px}.page-layout .page-preview{margin-top:0}.page-thumbs{display:grid;gap:6px;max-height:650px;overflow:auto;align-content:start}.page-thumbs button{position:relative;border:2px solid transparent;border-radius:7px;padding:2px;background:#f1f3f8;color:#707a95}.page-thumbs button.selected{border-color:#c8c1fa}.page-thumbs button.active{border-color:#6557e8}.page-thumbs img{display:block;width:100%;height:82px;object-fit:cover;border-radius:4px}.page-thumbs span{position:absolute;right:4px;bottom:4px;background:rgba(24,28,48,.75);color:#fff;border-radius:4px;padding:2px 4px;font-size:8px}
 .provider-state{margin-top:10px;padding:8px;border-radius:8px;background:#f4f2ff;color:#665b8d;font-size:9px}.semantic-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}.semantic-grid>div{display:flex;flex-direction:column;padding:7px;background:#fff;border-radius:7px}.semantic-grid b{font-size:8px;color:#405675}.semantic-grid span{font-size:8px;color:#8a96aa;margin-top:2px}.story-form .span-two{grid-column:1/-1}.story-form .check{display:flex;align-items:center;gap:7px}.story-form .check input{width:auto}
 .provider-state small{display:block;margin-top:4px}.ai-button{margin-top:8px}.evidence-chips{display:flex;gap:3px;flex-wrap:wrap;margin-top:5px}.evidence-chips button{border:0;border-radius:5px;padding:3px 5px;background:#ece9ff;color:#5c50cf;font-size:8px;cursor:pointer}
-@media(max-width:520px){.path-row,.issue-filters{grid-template-columns:1fr}.page-layout{grid-template-columns:1fr}.page-thumbs{grid-template-columns:repeat(4,1fr);max-height:none}.page-thumbs img{height:86px}.semantic-grid{grid-template-columns:1fr}}
+.quality-review{margin-top:12px;padding:12px;border:1px solid #ddd9fa;border-radius:10px;background:#fff}.quality-review h3{margin:3px 0 8px}.quality-review h4{margin:12px 0 6px;font-size:10px;color:#59627c}.quality-review article{position:relative;padding:8px;border-top:1px solid #edf0f6}.quality-review article b{font-size:9px}.quality-review article p{margin:4px 0;font-size:9px}.quality-metrics{display:flex;flex-wrap:wrap;gap:5px}.quality-metrics span,.confidence-badge{padding:4px 6px;border-radius:999px;background:#f1f3f8;font-size:8px}.confidence-badge{float:right}.confidence-badge.high{background:#e7f8ef;color:#198461}.confidence-badge.medium{background:#fff4d8;color:#9d6c19}.confidence-badge.low{background:#fff0f2;color:#be4255}.evidence-link{border:0;background:transparent;color:#6557e8;font-size:8px;cursor:pointer;padding:0}.quality-warnings{margin-top:9px;padding:8px;background:#fff7e6;border-radius:8px}.quality-warnings p{margin:3px 0;font-size:8px}
+@media(max-width:520px){.path-row,.issue-filters{grid-template-columns:1fr}.page-layout{grid-template-columns:1fr}.page-thumbs{grid-template-columns:repeat(4,1fr);max-height:none}.page-thumbs img{height:86px}.semantic-grid{grid-template-columns:1fr}.collection-row>div{min-width:0}.collection-row b{word-break:break-all}.collection-list{min-width:0;overflow:hidden}}
 </style>

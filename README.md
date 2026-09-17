@@ -1,6 +1,6 @@
 # ComfyWorkflowStudio
 
-本地优先的 ComfyUI 工作流知识库与童语动画生产平台。当前阶段为 **Phase 1H-3.1**。
+本地优先的 ComfyUI 工作流知识库与童语动画生产平台。当前阶段为 **Phase 1H-4**。
 
 ## 当前能力
 

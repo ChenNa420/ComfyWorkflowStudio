@@ -250,6 +250,11 @@ def comic_story_router() -> APIRouter:
             return {'provider': 'unknown', 'enabled': False, 'configured': False, 'model': None,
                     'baseUrlSafe': '', 'supportsVision': False, 'reason': str(exc)}
 
+    @router.post('/ai/probe')
+    def ai_probe():
+        try: return _service().probe()
+        except ComicAiError as exc: _ai_error(exc)
+
     @router.post('/scan')
     def scan_library(payload: ComicScanRequest):
         root = _clean_path(payload.path)
@@ -359,8 +364,6 @@ def comic_story_router() -> APIRouter:
     def semantic_analyze(payload: ComicAnalyzeRequest):
         path = _assert_registered(payload.token)
         _, pages = _source_pages(path, payload.startPage, payload.endPage)
-        if len(pages) > 12:
-            raise HTTPException(status_code=413, detail={'code': 'AI_CONTEXT_TOO_LARGE', 'message': '最多一次分析 12 页'})
         try:
             return _service().analyze(path, payload.token, pages, payload.forceRefresh)
         except ComicAiError as exc:

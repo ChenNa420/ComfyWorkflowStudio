@@ -9,7 +9,12 @@ class DisabledComicAiProvider:
 
     def get_status(self) -> dict[str, Any]:
         return {'provider': self.name, 'enabled': False, 'configured': True, 'model': None,
-                'baseUrlSafe': '', 'supportsVision': False, 'reason': 'AI Provider is disabled by default'}
+                'baseUrlSafe': '', 'supportsVision': False, 'reachable': False,
+                'visionVerified': False, 'structuredOutputVerified': False, 'lastProbeAt': None,
+                'reason': 'AI Provider is disabled by default'}
+
+    def probe(self):
+        raise RuntimeError('AI_PROVIDER_DISABLED')
 
     @staticmethod
     def _pending() -> dict[str, Any]:
