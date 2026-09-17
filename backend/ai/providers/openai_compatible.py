@@ -41,6 +41,18 @@ Do not guess names. Use null unless a name is visibly supported. Temporary IDs o
 Do not infer cross-page causes, endings, relationships, or hidden events. Set confidence honestly.
 The backend supplies the authoritative page number. Return concise strict JSON only.'''
 
+ADAPT_FACT_RULES = '''Use only supplied source facts. Do not invent new source characters, source events, source dialogue, or source evidence IDs.
+Unknown or unassigned speakers must remain unknown/unassigned; never guess a character identity.
+You may simplify, reorder, condense, and paraphrase for child-safe Pre-A1 teaching while preserving balanced fidelity.
+Every source-grounded beat must reference only supplied sourceEvidenceIds. Return concise strict JSON only.'''
+
+
+def _adapt_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    keys = ('style', 'audience', 'language', 'level', 'educationGoals', 'fidelity', 'preserveCharacterNames',
+            'preserveCorePlot', 'preserveDialogue', 'shotCount', 'aspectRatio')
+    return {key: settings.get(key) for key in keys}
+
+
 
 def safe_base_url(value: str) -> str:
     try:
@@ -182,6 +194,24 @@ class OpenAICompatibleComicProvider:
         return self._request(PAGE_VISUAL_RULES + self._schema_instruction('page_visual'),
                              {'_schema': 'page_visual', 'page': page['page'], 'textLayer': page.get('text', '')},
                              [page['image']], [page['page']])
+
+    def plan_adaptation(self, context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        purpose = (ADAPT_FACT_RULES + '\nStage 1: create a short story structure plan only. Produce 4-8 beats; do not generate shots, image prompts, video prompts, or character prompts.'
+                   + self._schema_instruction('adaptation_plan'))
+        return self._request(purpose, {'_schema': 'adaptation_plan', 'context': context, 'settings': _adapt_settings(settings)})
+
+    def generate_adapted_story(self, plan: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        used_ids = set(plan.get('sourceEvidenceIds', []))
+        for beat in plan.get('beats', []): used_ids.update(beat.get('sourceEvidenceIds', []))
+        for dialogue in context.get('keyDialogues', []): used_ids.update(dialogue.get('sourceEvidenceIds', []))
+        compact = {
+            'sourcePages': context.get('sourcePages', []), 'tone': context.get('tone', 'unknown'),
+            'characters': context.get('characters', []), 'keyDialogues': context.get('keyDialogues', []),
+            'sourceEvidence': [item for item in context.get('sourceEvidence', []) if item.get('id') in used_ids],
+        }
+        purpose = (ADAPT_FACT_RULES + '\nStage 2: turn the supplied plan into the final adapted story. storyBeats must contain exactly the requested shotCount. Do not generate Episode prompts.'
+                   + self._schema_instruction('adapted_story_draft'))
+        return self._request(purpose, {'_schema': 'adapted_story_draft', 'plan': plan, 'context': compact, 'settings': _adapt_settings(settings)})
 
     def adapt_story(self, analysis: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         return self._request('Adapt this source analysis into a child-safe story. Clearly separate Source Facts from Adapted Content, preserve evidence mappings, and list every creative change in adaptationNotes.' + self._schema_instruction('adapted_story'), {'_schema': 'adapted_story', 'analysis': analysis, 'settings': settings})

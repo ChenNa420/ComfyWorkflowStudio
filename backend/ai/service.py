@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,13 @@ import fitz
 from pydantic import ValidationError
 
 from backend.db import ROOT
-from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, Episode
+from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, AdaptationContext, AdaptationPlan, AdaptedStoryDraft, Episode
 from .pagewise import analyze_pagewise, STRATEGY as PAGEWISE_STRATEGY
+from .adaptation import (
+    ADAPT_SCHEMA_VERSION, ADAPT_PROMPT_VERSION, adaptation_cache_key, build_adaptation_context,
+    build_evidence_catalog, final_story_from_draft, read_cached, validate_draft_references,
+    validate_plan_references, write_cached,
+)
 
 MAX_ARCHIVE_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 250 * 1024 * 1024
@@ -273,13 +279,90 @@ class ComicAiService:
             selected = semantic.get('source', {}).get('pages', [])
             if not quality_summary(semantic, selected).get('qualityGatePassed'):
                 raise ComicAiError('AI_SEMANTIC_QUALITY_GATE_FAILED')
+
+        plan_call = getattr(self.provider, 'plan_adaptation', None)
+        final_call = getattr(self.provider, 'generate_adapted_story', None)
+        if not callable(plan_call) or not callable(final_call):
+            try:
+                value = AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
+                value['qualitySummary'] = {'adaptationNotes': len(value['adaptationNotes']), 'stagedAdaptation': False}
+                return value
+            except TimeoutError as exc:
+                raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                raise ComicAiError('AI_RESPONSE_INVALID') from exc
+            except RuntimeError as exc:
+                raise ComicAiError(str(exc)) from exc
+
+        started = time.perf_counter()
+        model = str(status.get('model') or 'unknown')
+        key = adaptation_cache_key(semantic, model, settings)
+        root = self.cache_dir / 'adaptation'
+        context_path = root / 'context' / f'{key}.json'
+        plan_path = root / 'plan' / f'{key}.json'
+        story_path = root / 'story' / f'{key}.json'
+        original_bytes = len(json.dumps(semantic, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
+        context_started = time.perf_counter()
+        context = read_cached(context_path, AdaptationContext)
+        context_hit = context is not None
+        if context is None:
+            context, restore, stats = build_adaptation_context(semantic)
+            with _CACHE_LOCK: write_cached(context_path, context)
+        else:
+            _, restore, _ = build_evidence_catalog(semantic)
+            stats = {
+                'dialogues': len(semantic.get('dialogues', [])), 'keyDialogues': len(context.get('keyDialogues', [])),
+                'characters': len(semantic.get('characters', [])),
+                'mainCharacters': sum(x.get('classification') == 'main' for x in context.get('characters', [])),
+                'supportingCharacters': sum(x.get('classification') == 'supporting' for x in context.get('characters', [])),
+                'backgroundCharacters': len(context.get('backgroundCharacters', [])),
+                'evidence': len(context.get('sourceEvidence', [])), 'compactEvidenceRefs': len(context.get('sourceEvidence', [])),
+            }
+        context_duration = time.perf_counter() - context_started
+        context_bytes = len(json.dumps(context, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
         try:
-            value = AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
-            value['qualitySummary'] = {'adaptationNotes': len(value['adaptationNotes'])}
+            plan_started = time.perf_counter()
+            plan = read_cached(plan_path, AdaptationPlan)
+            plan_hit = plan is not None
+            if plan is None:
+                plan = AdaptationPlan.model_validate(plan_call(context, settings)).model_dump()
+                unknown = [item['id'] for item in context.get('keyDialogues', []) if item.get('speaker') == 'unknown']
+                plan['unassignedDialogue'] = list(dict.fromkeys(plan.get('unassignedDialogue', []) + unknown))
+                plan = AdaptationPlan.model_validate(plan).model_dump()
+                validate_plan_references(plan, context)
+                with _CACHE_LOCK: write_cached(plan_path, plan)
+            else:
+                validate_plan_references(plan, context)
+            plan_duration = time.perf_counter() - plan_started
+
+            adapt_started = time.perf_counter()
+            draft = read_cached(story_path, AdaptedStoryDraft)
+            story_hit = draft is not None
+            if draft is None:
+                draft = AdaptedStoryDraft.model_validate(final_call(plan, context, settings)).model_dump()
+                expected = int(settings.get('shotCount') or 0)
+                if expected and len(draft.get('storyBeats', [])) != expected:
+                    raise ValueError('ADAPT_STORY_BEAT_COUNT_MISMATCH')
+                validate_draft_references(draft, context)
+                with _CACHE_LOCK: write_cached(story_path, draft)
+            else:
+                validate_draft_references(draft, context)
+            adapt_duration = time.perf_counter() - adapt_started
+            value = AdaptedStory.model_validate(final_story_from_draft(draft, restore)).model_dump()
+            value['qualitySummary'] = {
+                'adaptationNotes': len(value['adaptationNotes']), 'stagedAdaptation': True,
+                'schemaVersion': ADAPT_SCHEMA_VERSION, 'promptVersion': ADAPT_PROMPT_VERSION,
+                'cache': {'contextHit': context_hit, 'planHit': plan_hit, 'storyHit': story_hit},
+                'compression': {**stats, 'originalSemanticBytes': original_bytes, 'contextBytes': context_bytes},
+                'durations': {'contextBuildSeconds': round(context_duration, 3), 'planSeconds': round(plan_duration, 3),
+                              'adaptSeconds': round(adapt_duration, 3), 'totalSeconds': round(time.perf_counter() - started, 3)},
+            }
             return value
         except TimeoutError as exc:
             raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
-        except (ValueError, json.JSONDecodeError) as exc:
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             raise ComicAiError('AI_RESPONSE_INVALID') from exc
         except RuntimeError as exc:
             raise ComicAiError(str(exc)) from exc

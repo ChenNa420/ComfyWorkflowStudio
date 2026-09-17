@@ -34,6 +34,14 @@ class DisabledComicAiProvider:
 
     adapt_story = rewrite_story
 
+    def plan_adaptation(self, context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        del context, settings
+        return {'status': 'pending'}
+
+    def generate_adapted_story(self, plan: dict[str, Any], context: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        del plan, context, settings
+        return {'status': 'pending'}
+
     def generate_episode(self, story: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         del story, settings
         return {'status': 'pending'}

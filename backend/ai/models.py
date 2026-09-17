@@ -215,6 +215,91 @@ class SourceEvidence(BaseModel):
     evidence: str = ''
 
 
+class AdaptationEvidenceRef(BaseModel):
+    id: str
+    sourcePage: int = Field(ge=1)
+    kind: str
+    sourceId: str
+
+
+class AdaptationDialogue(BaseModel):
+    id: str
+    sourcePage: int = Field(ge=1)
+    sceneId: str | None = None
+    speaker: str = 'unknown'
+    text: str
+    dialogueSource: Literal['source'] = 'source'
+    sourceEvidenceIds: list[str] = Field(default_factory=list)
+
+
+class AdaptationDialogueSummary(BaseModel):
+    sourcePage: int = Field(ge=1)
+    sceneId: str | None = None
+    omittedCount: int = Field(ge=0)
+    summary: str
+
+
+class AdaptationCharacter(BaseModel):
+    id: str
+    name: str = 'unknown'
+    role: str = 'unknown'
+    classification: Literal['main', 'supporting', 'background']
+    pages: list[int] = Field(default_factory=list)
+    summary: str = ''
+    confidence: float = Field(default=0, ge=0, le=1)
+    needsReview: bool = False
+    sourceEvidenceIds: list[str] = Field(default_factory=list)
+
+
+class AdaptationContext(BaseModel):
+    sourcePages: list[int] = Field(min_length=1)
+    tone: str = 'unknown'
+    premise: str = ''
+    characters: list[AdaptationCharacter] = Field(default_factory=list)
+    backgroundCharacters: list[AdaptationCharacter] = Field(default_factory=list)
+    scenes: list[dict[str, Any]] = Field(default_factory=list)
+    storyBeats: list[dict[str, Any]] = Field(default_factory=list)
+    keyDialogues: list[AdaptationDialogue] = Field(default_factory=list)
+    dialogueSummary: list[AdaptationDialogueSummary] = Field(default_factory=list)
+    plotEvents: list[dict[str, Any]] = Field(default_factory=list)
+    sourceEvidence: list[AdaptationEvidenceRef] = Field(default_factory=list)
+
+
+class AdaptationBeat(BaseModel):
+    id: str
+    summary: str
+    sourcePages: list[int] = Field(min_length=1)
+    sourceEvidenceIds: list[str] = Field(default_factory=list)
+
+
+class AdaptationPlan(BaseModel):
+    title: str
+    premise: str
+    mainCharacters: list[str] = Field(default_factory=list)
+    beginning: str
+    middle: str
+    ending: str
+    conflict: str = 'unknown'
+    resolution: str = 'unknown'
+    beats: list[AdaptationBeat] = Field(min_length=4, max_length=8)
+    sourceEvidenceIds: list[str] = Field(default_factory=list)
+    unassignedDialogue: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AdaptedStoryDraft(BaseModel):
+    title: str
+    logline: str
+    summary: str
+    characters: list[dict[str, Any]]
+    scenes: list[dict[str, Any]]
+    storyBeats: list[AdaptationBeat] = Field(min_length=1, max_length=12)
+    ending: str
+    learningGoals: list[str]
+    sourceEvidenceIds: list[str] = Field(default_factory=list)
+    adaptationNotes: list[str] = Field(default_factory=list)
+
+
 class AdaptedStory(BaseModel):
     title: str
     logline: str
