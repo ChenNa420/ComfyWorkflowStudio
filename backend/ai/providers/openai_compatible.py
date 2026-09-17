@@ -29,6 +29,18 @@ SEMANTIC_RULES = '''This is a comic understanding task, not free story writing.
 12. Keep the response concise: at most 6 scenes, 10 dialogues, and 8 plot events; use one short evidence item per record and keep descriptive fields under 20 words.
 Do not rewrite the plot, add dialogue, create an ending, or educationally adapt content.'''
 
+PAGE_DIALOGUE_RULES = '''Transcribe every readable speech bubble and caption on this one comic page.
+Do not summarize. Do not invent missing text. Preserve wording and punctuation when readable.
+Keep speakerTemporaryId null when uncertain; never drop dialogue merely because the speaker is uncertain.
+Use only temporary character labels visible on this page. Set confidence honestly and needsReview for uncertain OCR.
+The backend supplies the authoritative page number. Return concise strict JSON only.'''
+
+PAGE_VISUAL_RULES = '''Extract visual facts from this one comic page. Do not transcribe long dialogue.
+Describe visible characters, one overall scene, props, and observable actions only.
+Do not guess names. Use null unless a name is visibly supported. Temporary IDs only; do not create stable identities.
+Do not infer cross-page causes, endings, relationships, or hidden events. Set confidence honestly.
+The backend supplies the authoritative page number. Return concise strict JSON only.'''
+
 
 def safe_base_url(value: str) -> str:
     try:
@@ -160,6 +172,16 @@ class OpenAICompatibleComicProvider:
         images = [p['image'] for p in pages if p.get('image')]
         safe_pages = [{'page': p['page'], 'text': p.get('text', '')} for p in pages]
         return self._request(SEMANTIC_RULES + self._schema_instruction('semantic'), {'_schema': 'semantic', 'pages': safe_pages, 'previousContext': context or {}}, images, [p['page'] for p in pages if p.get('image')])
+
+    def analyze_page_dialogue(self, page: dict[str, Any]) -> dict[str, Any]:
+        return self._request(PAGE_DIALOGUE_RULES + self._schema_instruction('page_dialogue'),
+                             {'_schema': 'page_dialogue', 'page': page['page'], 'textLayer': page.get('text', '')},
+                             [page['image']], [page['page']])
+
+    def analyze_page_visual(self, page: dict[str, Any]) -> dict[str, Any]:
+        return self._request(PAGE_VISUAL_RULES + self._schema_instruction('page_visual'),
+                             {'_schema': 'page_visual', 'page': page['page'], 'textLayer': page.get('text', '')},
+                             [page['image']], [page['page']])
 
     def adapt_story(self, analysis: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         return self._request('Adapt this source analysis into a child-safe story. Clearly separate Source Facts from Adapted Content, preserve evidence mappings, and list every creative change in adaptationNotes.' + self._schema_instruction('adapted_story'), {'_schema': 'adapted_story', 'analysis': analysis, 'settings': settings})

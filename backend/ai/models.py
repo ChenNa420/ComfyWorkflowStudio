@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-SCHEMA_VERSION = "1h4-v1"
+SCHEMA_VERSION = "1h4b-v3"
 
 
 class Evidence(BaseModel):
     sourcePage: int = Field(ge=1)
     evidence: str = ""
+    evidenceType: str = "visual_fact"
+    systemGrounded: bool = False
 
 
 class Character(BaseModel):
@@ -18,6 +20,11 @@ class Character(BaseModel):
     description: str = ""
     appearance: str = ""
     clothing: str = ""
+    bodyType: str = "unknown"
+    hairOrFur: str = "unknown"
+    accessories: list[str] = Field(default_factory=list)
+    prompt: str = ""
+    negativePrompt: str = "identity drift, inconsistent clothing, extra limbs"
     personality: str = "unknown"
     role: str = "unknown"
     firstSeenPage: int = Field(ge=1)
@@ -47,6 +54,12 @@ class Dialogue(BaseModel):
     language: str = "unknown"
     confidence: float = Field(default=0, ge=0, le=1)
     evidence: str = ""
+    evidenceType: str = "speech_bubble"
+    systemGrounded: bool = False
+    speakerResolution: Literal['resolved', 'unknown', 'conflict'] = 'unknown'
+    speakerDescription: str = ""
+    bubblePosition: str = "unknown"
+    needsReview: bool = False
 
 
 class PlotEvent(BaseModel):
@@ -101,13 +114,13 @@ class StorySummary(BaseModel):
 
 class SemanticAnalysis(BaseModel):
     id: str = ""
-    characters: list[Character] = Field(default_factory=list, max_length=4)
-    scenes: list[Scene] = Field(default_factory=list, max_length=6)
-    dialogues: list[Dialogue] = Field(default_factory=list, max_length=10)
-    plotEvents: list[PlotEvent] = Field(default_factory=list, max_length=8)
+    characters: list[Character] = Field(default_factory=list, max_length=48)
+    scenes: list[Scene] = Field(default_factory=list, max_length=24)
+    dialogues: list[Dialogue] = Field(default_factory=list, max_length=128)
+    plotEvents: list[PlotEvent] = Field(default_factory=list, max_length=48)
     visualStyle: VisualStyle = Field(default_factory=VisualStyle)
-    props: list[Prop] = Field(default_factory=list, max_length=8)
-    locations: list[Location] = Field(default_factory=list, max_length=4)
+    props: list[Prop] = Field(default_factory=list, max_length=32)
+    locations: list[Location] = Field(default_factory=list, max_length=16)
     storySummary: StorySummary = Field(default_factory=StorySummary)
     warnings: list[str] = Field(default_factory=list, max_length=8)
     needsReview: bool = False
@@ -122,6 +135,79 @@ class SemanticAnalysis(BaseModel):
     @classmethod
     def validate_provider(cls, value: dict[str, Any]) -> "SemanticAnalysis":
         return cls.model_validate(value)
+
+
+class PageCharacter(BaseModel):
+    temporaryId: str
+    name: str | None = None
+    appearance: str = ""
+    clothing: str = ""
+    bodyType: str = "unknown"
+    hairOrFur: str = "unknown"
+    accessories: list[str] = Field(default_factory=list)
+    position: str = "unknown"
+    roleHint: str = "unknown"
+    confidence: float = Field(default=0, ge=0, le=1)
+    needsReview: bool = False
+
+
+class PageDialogue(BaseModel):
+    text: str
+    speakerTemporaryId: str | int | None = None
+    speakerDescription: str = ""
+    bubblePosition: str = "unknown"
+    confidence: float = Field(default=0, ge=0, le=1)
+    needsReview: bool = False
+
+    @field_validator('confidence', mode='before')
+    @classmethod
+    def normalize_confidence(cls, value: Any) -> float:
+        try:
+            number = float(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        if number > 1:
+            number /= 100
+        return max(0, min(1, number))
+
+
+class PageDialogueResult(BaseModel):
+    page: int = Field(ge=1)
+    dialogues: list[PageDialogue] = Field(default_factory=list, max_length=64)
+    warnings: list[str] = Field(default_factory=list, max_length=8)
+
+
+class PageScene(BaseModel):
+    location: str = "unknown"
+    timeOfDay: str = "unknown"
+    description: str = ""
+    mood: str = "unknown"
+    confidence: float = Field(default=0, ge=0, le=1)
+    needsReview: bool = False
+
+
+class PagePlotEvent(BaseModel):
+    action: str
+    characterTemporaryIds: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0, ge=0, le=1)
+    needsReview: bool = False
+
+
+class PageProp(BaseModel):
+    name: str
+    description: str = ""
+    ownerTemporaryId: str | None = None
+    confidence: float = Field(default=0, ge=0, le=1)
+
+
+class PageVisualResult(BaseModel):
+    page: int = Field(ge=1)
+    characters: list[PageCharacter] = Field(default_factory=list, max_length=12)
+    scene: PageScene | None = None
+    plotEvents: list[PagePlotEvent] = Field(default_factory=list, max_length=12)
+    props: list[PageProp] = Field(default_factory=list, max_length=12)
+    visualNotes: str = ""
+    warnings: list[str] = Field(default_factory=list, max_length=8)
 
 
 class SourceEvidence(BaseModel):

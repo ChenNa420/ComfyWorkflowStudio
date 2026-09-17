@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from backend.db import ROOT
 from .models import SCHEMA_VERSION, SemanticAnalysis, AdaptedStory, Episode
+from .pagewise import analyze_pagewise, STRATEGY as PAGEWISE_STRATEGY
 
 MAX_ARCHIVE_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 250 * 1024 * 1024
@@ -25,6 +26,7 @@ ERROR_CODES = {
     'AI_MODEL_VISION_UNSUPPORTED', 'AI_RESPONSE_INVALID', 'AI_REQUEST_TIMEOUT',
     'AI_CONTEXT_TOO_LARGE',
     'AI_EVIDENCE_OUT_OF_RANGE',
+    'AI_SEMANTIC_QUALITY_GATE_FAILED',
 }
 
 
@@ -86,12 +88,15 @@ def validate_evidence_pages(value: dict[str, Any], allowed: set[int]) -> None:
 def quality_summary(value: dict[str, Any], selected: list[int]) -> dict[str, Any]:
     characters, dialogues = value.get('characters', []), value.get('dialogues', [])
     evidence_count = sum(len(x.get('evidence', [])) for key in ('characters','scenes','plotEvents') for x in value.get(key, []))
+    evidence_count += sum(bool(x.get('systemGrounded') and x.get('evidence')) for x in dialogues)
     return {'selectedPages': selected, 'charactersDetected': len(characters),
             'charactersNeedingReview': sum(bool(x.get('needsReview')) for x in characters),
             'dialoguesDetected': len(dialogues), 'speakerResolved': sum(x.get('speakerId') is not None for x in dialogues),
             'speakerUnknown': sum(x.get('speakerId') is None for x in dialogues), 'scenesDetected': len(value.get('scenes', [])),
             'plotEventsDetected': len(value.get('plotEvents', [])), 'evidenceCount': evidence_count,
-            'evidenceInvalid': 0, 'semanticWarnings': len(value.get('warnings', []))}
+            'evidenceInvalid': 0, 'semanticWarnings': len(value.get('warnings', [])),
+            'qualityGatePassed': bool(characters and dialogues and value.get('scenes') and value.get('plotEvents')
+                                      and evidence_count and value.get('storySummary', {}).get('premise'))}
 
 
 def _context(result: dict[str, Any]) -> dict[str, Any]:
@@ -190,7 +195,12 @@ class ComicAiService:
         profile = os.getenv('COMIC_AI_IMAGE_PROFILE', 'standard').strip().lower()
         edge = 1600 if profile == 'high' else 1280
         fingerprint = _file_fingerprint(path)
-        key_input = {**fingerprint, 'pages': [p['page'] for p in pages], 'provider': status['provider'], 'model': status['model'], 'schema': SCHEMA_VERSION}
+        configured_strategy = os.getenv('COMIC_AI_ANALYSIS_STRATEGY', '').strip().lower()
+        strategy = configured_strategy or (PAGEWISE_STRATEGY if status.get('isLocalEndpoint') and '7b' in str(status.get('model', '')).lower() else 'single-request')
+        if strategy not in {'single-request', PAGEWISE_STRATEGY}:
+            strategy = 'single-request'
+        key_input = {**fingerprint, 'pages': [p['page'] for p in pages], 'provider': status['provider'], 'model': status['model'],
+                     'schema': SCHEMA_VERSION, 'strategy': strategy, 'imageProfile': profile, 'fusionRevision': '1h4b-f4'}
         analysis_id = hashlib.sha256(json.dumps(key_input, sort_keys=True).encode()).hexdigest()[:24]
         target = (self.cache_dir / f'{analysis_id}.json').resolve()
         target.relative_to(self.cache_dir)
@@ -205,19 +215,25 @@ class ComicAiService:
         results: list[dict[str, Any]] = []
         request_retries = 0
         prior: dict[str, Any] = {}
+        pagewise_metrics: dict[str, Any] = {}
         try:
-            for offset in range(0, len(pages), 4):
-                batch = []
-                for page in pages[offset:offset + 4]:
-                    image, image_meta = _render_page(path, page['page'], edge)
-                    batch.append({**page, 'image': image, 'imageMeta': image_meta})
-                raw = self.provider.analyze_comic_pages(batch, prior)
-                request_retries += int(raw.pop('_requestRetries', 0))
-                validated = SemanticAnalysis.validate_provider(raw).model_dump()
-                validate_evidence_pages(validated, {p['page'] for p in batch})
-                results.append(validated)
-                prior = _context(validated)
-            merged = SemanticAnalysis.validate_provider(merge_batches(results)).model_dump()
+            if strategy == PAGEWISE_STRATEGY:
+                merged, pagewise_metrics = analyze_pagewise(self.provider, path, pages, fingerprint, str(status['model']),
+                                                             profile, edge, self.cache_dir, force_refresh, _render_page)
+                results = [merged]
+            else:
+                for offset in range(0, len(pages), 4):
+                    batch = []
+                    for page in pages[offset:offset + 4]:
+                        image, image_meta = _render_page(path, page['page'], edge)
+                        batch.append({**page, 'image': image, 'imageMeta': image_meta})
+                    raw = self.provider.analyze_comic_pages(batch, prior)
+                    request_retries += int(raw.pop('_requestRetries', 0))
+                    validated = SemanticAnalysis.validate_provider(raw).model_dump()
+                    validate_evidence_pages(validated, {p['page'] for p in batch})
+                    results.append(validated)
+                    prior = _context(validated)
+                merged = SemanticAnalysis.validate_provider(merge_batches(results)).model_dump()
         except TimeoutError as exc:
             raise ComicAiError('AI_REQUEST_TIMEOUT') from exc
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -230,11 +246,13 @@ class ComicAiService:
         result = {**merged, 'id': analysis_id,
                   'source': {'type': 'comic', 'name': path.name, 'fileToken': token, 'pages': [p['page'] for p in pages]},
                   'provider': status['provider'], 'model': status['model'], 'schemaVersion': SCHEMA_VERSION,
-                  'cacheHit': False, 'batchCount': len(results), 'imageProfile': profile,
-                  'renderMetrics': [p['imageMeta'] | {'page': p['page']} for p in batch] if len(results)==1 else [],
+                  'cacheHit': False, 'batchCount': len(results), 'imageProfile': profile, 'analysisStrategy': strategy,
+                  'renderMetrics': pagewise_metrics.get('renderMetrics', []) if strategy == PAGEWISE_STRATEGY else ([p['imageMeta'] | {'page': p['page']} for p in batch] if len(results)==1 else []),
                   'qualitySummary': quality_summary(merged, selected), 'requestRetries': request_retries}
         result['qualitySummary'].update({'charactersBeforeMerge': sum(len(x.get('characters', [])) for x in results),
                                          'charactersAfterMerge': len(merged.get('characters', []))})
+        if strategy == PAGEWISE_STRATEGY:
+            result.update({key: value for key, value in pagewise_metrics.items() if key != 'renderMetrics'})
         if request_retries: result['warnings'].append(f'provider_network_retried:{request_retries}')
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(result, ensure_ascii=False, indent=2)
@@ -251,6 +269,10 @@ class ComicAiService:
             raise ComicAiError('AI_PROVIDER_DISABLED')
         if not status['configured']:
             raise ComicAiError('AI_MODEL_NOT_CONFIGURED')
+        if semantic.get('analysisStrategy') == PAGEWISE_STRATEGY:
+            selected = semantic.get('source', {}).get('pages', [])
+            if not quality_summary(semantic, selected).get('qualityGatePassed'):
+                raise ComicAiError('AI_SEMANTIC_QUALITY_GATE_FAILED')
         try:
             value = AdaptedStory.model_validate(self.provider.adapt_story(semantic, settings)).model_dump()
             value['qualitySummary'] = {'adaptationNotes': len(value['adaptationNotes'])}

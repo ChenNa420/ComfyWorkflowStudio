@@ -63,7 +63,7 @@ class Phase1H4Tests(unittest.TestCase):
             provider=OpenAICompatibleComicProvider(); provider.probe(); provider.analyze_comic_pages([{'page':1,'text':'','image':b'a'}])
         self.assertEqual(formats[0],{'type':'text'})
         self.assertEqual(formats[1]['type'],'json_schema'); self.assertEqual(formats[1]['json_schema']['name'],'semantic')
-        self.assertEqual(formats[1]['json_schema']['schema']['properties']['characters']['maxItems'],4)
+        self.assertEqual(formats[1]['json_schema']['schema']['properties']['characters']['maxItems'],48)
 
     def test_evidence_out_of_range_is_not_cached(self):
         provider=FakeProvider(); provider.analyze_comic_pages=lambda *_: semantic(6)
