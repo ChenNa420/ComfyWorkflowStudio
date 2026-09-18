@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   ArrowLeft, ArrowRight, BookOpenCheck, Braces, CheckCircle2, CircleAlert,
-  Copy, ExternalLink, FileText, Film, FolderSearch, LoaderCircle, RefreshCw,
+  Copy, FileText, Film, FolderSearch, LoaderCircle, RefreshCw,
   Sparkles, Wifi, WifiOff,
 } from 'lucide-vue-next'
 
@@ -696,7 +696,7 @@ onUnmounted(()=>lifecycle.abort())
     </section>
 
     <section class="step-strip panel">
-      <div v-for="item in [{n:1,t:'选择漫画',s:'选择来源 PDF'},{n:2,t:'选择页面与改编',s:'1–12 页任意选择'},{n:3,t:'手动交给 GPT',s:'上传源页 + 粘贴提示词'},{n:4,t:'导入结果',s:'故事、分镜与提示词'}]" :key="item.n" :class="['step-card',{active:workflowStep===item.n,done:workflowStep>item.n}]">
+      <div v-for="item in [{n:1,t:'选择漫画',s:'选择来源 PDF'},{n:2,t:'选择页面与改编',s:'1–12 页任意选择'},{n:3,t:'准备到 GPT',s:'自动上传源页 + 填写提示词'},{n:4,t:'导入结果',s:'故事、分镜与提示词'}]" :key="item.n" :class="['step-card',{active:workflowStep===item.n,done:workflowStep>item.n}]">
         <span>{{item.n}}</span><div><b>{{item.t}}</b><small>{{item.s}}</small></div>
       </div>
     </section>
@@ -759,7 +759,7 @@ onUnmounted(()=>lifecycle.abort())
         </article>
 
         <article class="panel task-card">
-          <div class="section-title compact"><div><span class="step-number">3</span><div><h3>手动 GPT 编剧导演</h3><p>创建 Task 后，把所选漫画页和任务说明手动交给童语工坊；GPT 返回 JSON 后再粘贴回工作台。</p></div></div></div>
+          <div class="section-title compact"><div><span class="step-number">3</span><div><h3>半自动 GPT 编剧导演</h3><p>创建 Task 后，一键把所选漫画页和任务说明准备到童语工坊；你检查后手动发送，GPT 返回 JSON 后再粘贴回工作台。</p></div></div></div>
           <button class="primary task-create" :disabled="!selectedPagesSorted.length||loading==='task'" @click="createTask"><LoaderCircle v-if="loading==='task'" class="spin" :size="17"/><FileText v-else :size="17"/>{{activeTask?'重新创建手动 Task':'创建手动 GPT Task'}}</button>
 
           <div v-if="activeTask" class="task-summary">
