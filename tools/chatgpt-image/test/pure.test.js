@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { candidateKey, diffCandidates, sessionPayloadAuthenticated } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
-import { composeGenerationPrompt } from "../image-generator.js";
+import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
 
 test("allows only ChatGPT HTTPS URLs", () => {
@@ -30,6 +30,13 @@ test("defaults to Tongyu GPT and local CDP", () => {
 test("allows explicit CDP opt-out", () => {
   const config = loadConfig({ CWS_CHATGPT_IMAGE_CDP_URL: "off" });
   assert.equal(config.cdpUrl, "");
+});
+
+test("allows source page downloads only from local HTTP", () => {
+  assert.equal(new URL(validateSourcePageUrl("http://127.0.0.1:8100/api/page/1")).hostname, "127.0.0.1");
+  assert.equal(new URL(validateSourcePageUrl("http://localhost:8100/api/page/1")).hostname, "localhost");
+  assert.throws(() => validateSourcePageUrl("https://127.0.0.1:8100/api/page/1"));
+  assert.throws(() => validateSourcePageUrl("http://example.com/page.jpg"));
 });
 
 test("candidate diff keeps only unseen images", () => {
