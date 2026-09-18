@@ -464,12 +464,12 @@ async function copyTaskPrompt(){
 }
 
 async function openGpt(){
-  if(!activeTask.value)await createTask()
   if(!activeTask.value)return
-  await copyTaskPrompt()
   let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
   if(!/^https?:\/\//i.test(url))url=`https://${url}`
   window.open(url,'_blank','noopener,noreferrer')
+  await copyTaskPrompt()
+  notice.value='已打开童语工坊，并复制任务说明。请上传上方所选源页后粘贴发送。'
 }
 
 function persistBridgeState(){
