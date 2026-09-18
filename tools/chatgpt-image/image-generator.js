@@ -129,6 +129,18 @@ export class ImageGenerator {
     });
   }
 
+  collectStory(input) {
+    return this.serialize(async () => {
+      const targetUrl = validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl));
+      const page = await this.session.getPage(targetUrl);
+      const collected = await new ChatGPTPage(page, this.config).collectStory(input?.assistantBaseline || {});
+      return {
+        ...collected,
+        browserMode: this.session.mode,
+      };
+    });
+  }
+
   generate(input) {
     return this.serialize(async () => {
       const prompt = composeGenerationPrompt(input);
