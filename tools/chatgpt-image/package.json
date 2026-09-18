@@ -1,0 +1,16 @@
+{
+  "name": "comfy-workflow-studio-chatgpt-image",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "check": "node --check *.js && node --test",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright-core": "^1.61.1"
+  }
+}
