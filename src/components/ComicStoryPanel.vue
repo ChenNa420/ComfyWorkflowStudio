@@ -60,6 +60,7 @@ const manualJson = ref('')
 const promptCopied = ref(false)
 const preparingGpt = ref(false)
 const collectingGpt = ref(false)
+const fetchingGptNow = ref(false)
 let storyWatchNonce = 0
 const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
 const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
@@ -524,14 +525,16 @@ async function watchGptStory(taskId:string){
 async function collectGptStoryNow(){
   if(!activeTask.value)return
   error.value=''
-  collectingGpt.value=true
+  storyWatchNonce++
+  collectingGpt.value=false
+  fetchingGptNow.value=true
   try{
     const done=await collectGptStoryOnce(activeTask.value.id,true)
-    if(!done)notice.value='童语工坊还没有完成新的回复，请稍后再试。'
+    if(!done)notice.value='已强制读取当前童语工坊页面，但暂未检测到稳定的完整回复。'
   }catch(value){
     error.value=value instanceof Error?value.message:'获取 GPT 结果失败'
   }finally{
-    collectingGpt.value=false
+    fetchingGptNow.value=false
   }
 }
 
@@ -843,7 +846,7 @@ onUnmounted(()=>{storyWatchNonce++;collectingGpt.value=false;lifecycle.abort()})
 
           <div class="manual-flow-guide"><b>半自动手动流程</b><p>① 创建 Task　② 点击“准备到童语工坊 GPT”，系统自动上传漫画页并填好任务说明　③ 你检查后手动点击“发送”　④ 工作台自动监听 GPT 回复，必要时自动 repair 一次，然后自动写回并进入 Step 4。</p></div>
           <label class="gpt-url">童语工坊 GPT 页面地址<input v-model="gptUrl" placeholder="粘贴你的自定义 GPT 链接；留空则使用默认童语工坊" @change="saveGptUrl"/></label>
-          <div class="task-actions"><button class="gpt-open" :disabled="!activeTask||preparingGpt" @click="prepareGptDraft"><LoaderCircle v-if="preparingGpt" class="spin" :size="16"/><Sparkles v-else :size="16"/>{{preparingGpt?'正在准备…':'准备到童语工坊 GPT'}}</button><button class="secondary" :disabled="!activeTask||collectingGpt" @click="collectGptStoryNow"><LoaderCircle v-if="collectingGpt" class="spin" :size="15"/><RefreshCw v-else :size="15"/>{{collectingGpt?'等待 GPT…':'立即获取 GPT 结果'}}</button></div>
+          <div class="task-actions"><button class="gpt-open" :disabled="!activeTask||preparingGpt" @click="prepareGptDraft"><LoaderCircle v-if="preparingGpt" class="spin" :size="16"/><Sparkles v-else :size="16"/>{{preparingGpt?'正在准备…':'准备到童语工坊 GPT'}}</button><button class="secondary" :disabled="!activeTask||fetchingGptNow" @click="collectGptStoryNow"><LoaderCircle v-if="fetchingGptNow" class="spin" :size="15"/><RefreshCw v-else :size="15"/>{{fetchingGptNow?'正在回传…':collectingGpt?'立即强制回传':'立即获取 GPT 结果'}}</button></div>
           <button class="text-button prompt-backup" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="13"/>{{promptCopied?'任务说明已复制':'备用：复制任务说明'}}</button>
 
           <details class="developer-tools">
