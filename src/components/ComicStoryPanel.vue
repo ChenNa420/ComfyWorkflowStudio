@@ -470,10 +470,10 @@ async function copyTaskPrompt(){
   }catch{error.value='浏览器未允许复制，请手动复制任务说明。'}
 }
 
-async function collectGptStoryOnce(taskId:string){
+async function collectGptStoryOnce(taskId:string,useLatest=false){
   let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
   if(!/^https?:\/\//i.test(url))url=`https://${url}`
-  const value=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/collect-story`,{gptUrl:url})
+  const value=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/collect-story`,{gptUrl:url,useLatest})
   if(value.pending)return false
   await loadDirectorTask(taskId)
   notice.value=value.repaired
@@ -511,7 +511,7 @@ async function collectGptStoryNow(){
   error.value=''
   collectingGpt.value=true
   try{
-    const done=await collectGptStoryOnce(activeTask.value.id)
+    const done=await collectGptStoryOnce(activeTask.value.id,true)
     if(!done)notice.value='童语工坊还没有完成新的回复，请稍后再试。'
   }catch(value){
     error.value=value instanceof Error?value.message:'获取 GPT 结果失败'
