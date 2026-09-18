@@ -296,7 +296,12 @@ def comic_story_router() -> APIRouter:
             source = _gpt_director_source(path, payload.token, payload.selectedPages, str(request.base_url))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return director_store.create(source, payload.settings).model_dump(mode='json', exclude={'resultHash'})
+        task = director_store.create(source, payload.settings)
+        try:
+            director_store.bind_local_source(task.id, payload.token, path)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail='gpt_director_source_binding_failed') from exc
+        return task.model_dump(mode='json', exclude={'resultHash'})
 
     def director_payload(task_id: str):
         try:
@@ -327,6 +332,17 @@ def comic_story_router() -> APIRouter:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail='gpt_director_task_not_found') from exc
+
+        source_path = _FILE_REGISTRY.get(source_page.token)
+        if source_path is None or not source_path.is_file():
+            try:
+                source_path = director_store.resolve_local_source(task_id, source_page.token)
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail='gpt_director_source_binding_invalid') from exc
+            _FILE_REGISTRY[source_page.token] = source_path
+
         return comic_page(source_page.token, source_page.page, thumbnail=False)
 
     @router.post('/gpt-director/tasks/{task_id}/result')
