@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates, normalizeStoryResultShape, parseStoryJson, parseStoryJsonDetailed, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
+import { candidateKey, diffCandidates, normalizeStoryResultShape, parseStoryJson, parseStoryJsonDetailed, repairGptJsonText, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -95,6 +95,38 @@ test("story parser locally repairs unescaped dialogue quotes without changing co
   assert.equal(parsed.value.shots[0].english, 'Bobo, "wait!"');
   assert.equal(parsed.value.shots[0].imagePrompt, "frame");
   assert.equal(validateStoryResult(parsed.value), parsed.value);
+});
+
+test("repairs production-style canonical dialogue in videoPrompt into valid JSON text", () => {
+  const malformed = [
+    "{",
+    '"sourceUnderstanding":{"selectedPages":[5]},',
+    '"creativeStory":{"title":"The Little Happy Garden","summary":"demo","story":"demo","adaptationNotes":[]},',
+    '"characterDefinitions":[],"sceneDefinitions":[],',
+    '"shots":[',
+    '{"shotId":"S01","title":"发现空玻璃罐","duration":5,"storyPurpose":"goal","speaker":"mimi",',
+    '"english":"Let\'s make a tiny garden!","chinese":"我们做一个小小花园吧！",',
+    '"keyframeDescription":"frame","imagePrompt":"frame prompt",',
+    '"videoPrompt":"Keep the character stable. [CANONICAL_DIALOGUE] Speaker: mimi. The only spoken dialogue in this shot is exactly: "Let\'s make a tiny garden!" This exact English line is also the subtitle text. [/CANONICAL_DIALOGUE]",',
+    '"negativePrompt":"text, subtitles","sourcePages":[5]},',
+    '{"shotId":"S02","title":"找到石头和叶子","duration":5,"storyPurpose":"collect","speaker":"pip",',
+    '"english":"A stone and a leaf!","chinese":"一块石头和一片叶子！",',
+    '"keyframeDescription":"frame","imagePrompt":"frame prompt 2",',
+    '"videoPrompt":"The only spoken dialogue in this shot is exactly: "A stone and a leaf!" No other character speaks.",',
+    '"negativePrompt":"text","sourcePages":[5]}',
+    "]",
+    "}",
+  ].join("");
+
+  assert.throws(() => JSON.parse(malformed));
+  const repaired = repairGptJsonText(malformed);
+  assert.equal(repaired.repaired, true);
+  assert.match(repaired.repairMethod, /^local_/);
+  const parsed = JSON.parse(repaired.jsonText);
+  assert.equal(parsed.shots.length, 2);
+  assert.equal(parsed.shots[0].videoPrompt.includes('"Let\'s make a tiny garden!"'), true);
+  assert.equal(parsed.shots[1].videoPrompt.includes('"A stone and a leaf!"'), true);
+  assert.equal(validateStoryResult(normalizeStoryResultShape(parsed)), normalizeStoryResultShape(parsed));
 });
 
 test("story parser keeps punctuation after repaired dialogue quotes", () => {
