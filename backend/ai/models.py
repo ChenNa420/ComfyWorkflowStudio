@@ -326,6 +326,7 @@ class EpisodeCharacter(BaseModel):
     appearance: str = ''
     clothing: str = ''
     bodyType: str = 'unknown'
+    hairOrFur: str = ''
     accessories: list[str] = Field(default_factory=list)
     prompt: str = ''
     negativePrompt: str = 'identity drift, inconsistent clothing, extra limbs'

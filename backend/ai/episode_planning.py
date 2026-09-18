@@ -258,7 +258,8 @@ def assemble_episode(story: dict[str, Any], settings: dict[str, Any], plan: dict
     characters = [dict(item) for item in story.get('characters', []) if isinstance(item, dict)]
     definitions = [{'id': str(item.get('id')), 'name': item.get('name') or 'unknown', 'description': item.get('role') or '',
                     'appearance': item.get('appearance') or '', 'clothing': item.get('clothing') or '',
-                    'bodyType': item.get('bodyType') or 'unknown', 'accessories': item.get('accessories') or [],
+                    'bodyType': item.get('bodyType') or 'unknown', 'hairOrFur': item.get('hairOrFur') or '',
+                    'accessories': item.get('accessories') or [],
                     'prompt': item.get('prompt') or '', 'negativePrompt': item.get('negativePrompt') or 'identity drift, inconsistent clothing, extra limbs'} for item in characters]
     scenes = [{'id': str(item.get('id') or f'scene_{index + 1:02d}'), 'description': item.get('description') or item.get('summary') or '',
                'location': item.get('location') or 'unknown'} for index, item in enumerate(story.get('scenes', [])) if isinstance(item, dict)]
