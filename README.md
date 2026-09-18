@@ -1,13 +1,15 @@
 # ComfyWorkflowStudio
 
-本地优先的 ComfyUI 工作流知识库与童语动画生产平台。当前阶段为 **Phase 1H-4**。
+本地优先的 ComfyUI 工作流知识库与童语动画生产平台。当前主线为 **GPT Director + WebMCP + ChatGPT Web Image**。
 
 ## 当前能力
 
 - Workflow Knowledge、依赖检查、Readiness 与 Runtime Preflight
 - Certified Production Run、串行任务、输出与素材管理
-- 本地漫画扫描、页面预览、Comic-to-Story Episode
-- 可插拔 AI Semantic Provider，支持证据页、故事改编和严格 Episode Schema
+- 本地漫画扫描、页面预览、GPT Director Story/Shot/Episode
+- WebMCP 将所选漫画页以 ImageContent 交给“童语工坊 · AI动画编剧导演”并接收 Story / Shots / Prompts
+- ChatGPT Web Image Worker 通过本地 Chrome CDP 生成 Shot 关键帧并回填到 Studio
+- ComfyUI 继续负责后续工作流执行；图片引擎不依赖 OpenAI API Key
 
 ## 本地服务
 
@@ -15,19 +17,53 @@
 - API：`http://127.0.0.1:8100`
 - ComfyUI：默认 `http://127.0.0.1:8188`
 
-## Comic AI Provider
+## 一键启动
 
-默认 `COMIC_AI_PROVIDER=disabled`，只做本地解析，**不会自动把漫画发送到网络**。
+Windows：
 
-本地 OpenAI-compatible Vision 服务示例：
-
-```powershell
-$env:COMIC_AI_PROVIDER="openai_compatible"
-$env:COMIC_AI_BASE_URL="http://127.0.0.1:1234/v1"
-$env:COMIC_AI_MODEL="local-vision-model"
+```bat
+start-workbench.cmd
 ```
 
-本地无认证服务可以不设置 `COMIC_AI_API_KEY`。非 localhost 地址默认拒绝，只有显式设置 `COMIC_AI_ALLOW_REMOTE=true` 才允许连接。结构化输出默认为 `json_object`，也可设置 `COMIC_AI_STRUCTURED_OUTPUT=json_schema`。
+它只启动 Studio API（8100）和 Web（5174），并检测 ComfyUI（8188）和 ChatGPT Image CDP（9222）。不会启动或关闭 ComfyUI，也不使用 LM Studio。
+
+## GPT Director / 童语工坊 GPT
+
+默认 GPT：
+
+`https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan`
+
+故事主链：
+
+```text
+Selected comic pages
+→ WebMCP ImageContent
+→ 童语工坊 GPT
+→ Story / Shots / Prompts
+→ WebMCP
+→ ComfyWorkflowStudio
+```
+
+关键帧主链：
+
+```text
+Shot.imagePrompt
+→ local Chrome CDP
+→ 童语工坊 GPT
+→ generated image
+→ local frame storage
+→ Shot preview
+```
+
+首次使用图片引擎：
+
+```bat
+tools\chatgpt-image\start-cdp-chrome.cmd
+```
+
+保持该 Chrome 窗口开启并登录 ChatGPT。Worker 默认连接 `http://127.0.0.1:9222`，无需 OpenAI API Key。
+
+历史 Local AI / LM Studio 代码仅保留用于旧阶段兼容和回归测试，不属于当前默认运行依赖。
 
 ## 验证
 
