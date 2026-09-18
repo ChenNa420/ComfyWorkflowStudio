@@ -143,9 +143,12 @@ export class ImageGenerator {
 
   collectStory(input) {
     return this.serialize(async () => {
-      validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl));
-      const page = await this.session.getExistingChatGPTPage();
-      const collected = await new ChatGPTPage(page, this.config).collectStory(input?.assistantBaseline || {});
+      const targetUrl = validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl)).toString();
+      const page = await this.session.getExistingChatGPTPage(targetUrl);
+      const collected = await new ChatGPTPage(page, this.config).collectStory(
+        input?.assistantBaseline || {},
+        input?.useLatest === true,
+      );
       return {
         ...collected,
         browserMode: this.session.mode,
