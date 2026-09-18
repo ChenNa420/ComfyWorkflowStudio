@@ -6,6 +6,8 @@ import { ImageWorkerError } from "./errors.js";
 const toolRoot = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(toolRoot, "../..");
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
 function positiveInt(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -26,11 +28,27 @@ export function validateChatGPTUrl(value) {
   return parsed.toString();
 }
 
+export function validateCdpUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ImageWorkerError("Invalid CDP URL", "INVALID_CDP_URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new ImageWorkerError("CDP URL must use HTTP(S) on localhost/127.0.0.1", "INVALID_CDP_URL");
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+
 export function loadConfig(env = process.env) {
   return {
     profileDir: path.resolve(env.CWS_CHATGPT_IMAGE_PROFILE_DIR || path.join(repoRoot, "storage", "chatgpt-image-browser", "profile")),
     outputDir: path.resolve(env.CWS_CHATGPT_IMAGE_OUTPUT_DIR || path.join(repoRoot, "storage", "chatgpt-image-worker")),
     chatgptUrl: validateChatGPTUrl(env.CWS_CHATGPT_IMAGE_URL || "https://chatgpt.com/"),
+    cdpUrl: validateCdpUrl(env.CWS_CHATGPT_IMAGE_CDP_URL || ""),
     browserChannel: env.CWS_CHATGPT_IMAGE_CHANNEL || "chrome",
     headless: env.CWS_CHATGPT_IMAGE_HEADLESS === "1",
     timeoutMs: positiveInt(env.CWS_CHATGPT_IMAGE_TIMEOUT_MS, 240000, 30000, 600000),
