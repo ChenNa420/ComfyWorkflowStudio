@@ -19,6 +19,7 @@ async function main() {
     if (command === "login") result = await generator.login();
     else if (command === "check") result = await generator.check();
     else if (command === "prepare-story") result = await generator.prepareStory(await readStdin());
+    else if (command === "collect-story") result = await generator.collectStory(await readStdin());
     else if (command === "generate") result = await generator.generate(await readStdin());
     else throw Object.assign(new Error(`Unknown command: ${command}`), { code: "UNKNOWN_COMMAND" });
     process.stdout.write(`${JSON.stringify(result)}\n`);
