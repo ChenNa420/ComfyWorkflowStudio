@@ -485,9 +485,15 @@ async function collectGptStoryOnce(taskId:string,useLatest=false){
   const value=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/collect-story`,{gptUrl:url,useLatest})
   if(value.pending)return false
   await loadDirectorTask(taskId)
-  notice.value=value.repaired
-    ? `GPT JSON 已自动修复并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
-    : `GPT 结果已自动回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
+  notice.value=value.repairMethod==='local_jsonrepair'
+    ? `GPT JSON 已在本地自动修复并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
+    : value.repairMethod==='gpt_then_local_jsonrepair'
+      ? `GPT JSON 经 GPT 修复后又由本地校正并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
+      : value.repairMethod==='gpt'
+        ? `GPT JSON 已通过一次 GPT Repair 修复并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
+        : value.repaired
+          ? `GPT JSON 已自动修复并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
+          : `GPT 结果已自动回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
   return true
 }
 
