@@ -390,13 +390,26 @@ export class ChatGPTPage {
       return { ok: true, pending: true, repaired: false };
     }
 
+    // Guard against layouts where the stop/generating marker disappears briefly
+    // while the assistant text is still streaming. Only parse a stable snapshot.
+    await this.page.waitForTimeout(1800);
+    const stable = await assistantSnapshot(this.page);
+    if (
+      await isGenerating(this.page)
+      || !stable.text
+      || stable.count !== current.count
+      || stable.lastHash !== current.lastHash
+    ) {
+      return { ok: true, pending: true, repaired: false };
+    }
+
     let result;
     let repaired = false;
     try {
-      result = validateStoryResult(parseStoryJson(current.text));
+      result = validateStoryResult(parseStoryJson(stable.text));
     } catch (error) {
       if (!(error instanceof ImageWorkerError) || error.code !== "DIRECTOR_INVALID_JSON") throw error;
-      const repairedReply = await sendRepair(this.page, current.text, error.message);
+      const repairedReply = await sendRepair(this.page, stable.text, error.message);
       try {
         result = validateStoryResult(parseStoryJson(repairedReply.text));
         repaired = true;
@@ -415,7 +428,7 @@ export class ChatGPTPage {
       pending: false,
       repaired,
       result,
-      assistant: { count: current.count, lastHash: current.lastHash },
+      assistant: { count: stable.count, lastHash: stable.lastHash },
       url: this.page.url(),
     };
   }
