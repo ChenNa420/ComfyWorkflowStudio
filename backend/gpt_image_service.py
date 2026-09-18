@@ -325,6 +325,7 @@ class GPTImageService:
             'ok': True,
             'pending': False,
             'repaired': bool(collected.get('repaired')),
+            'repairMethod': collected.get('repairMethod'),
             'taskId': task_id,
             'status': completed.status,
             'title': result.creativeStory.title,
