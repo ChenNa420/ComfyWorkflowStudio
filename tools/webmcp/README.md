@@ -91,3 +91,39 @@ The first four are the production story bridge. The two probe tools remain devel
 The bridge is intended for local development. Do not change the relay host to `0.0.0.0` and do not use `--widget-origin *`.
 
 The relay does not make a normal ChatGPT web tab automatically discover another tab's tools. An MCP-compatible client still needs to connect to the local relay.
+
+
+## One-command smoke test
+
+Keep these running first:
+
+1. ComfyWorkflowStudio Web at `http://127.0.0.1:5174`
+2. The Studio tab showing `WebMCP 已就绪 · 6/6`
+3. `tools\webmcp\start-local-relay.cmd` on port 9333
+
+Then run:
+
+```bat
+tools\webmcp\test-relay.cmd
+```
+
+The first run installs the small test-client dependencies under `tools/webmcp/node_modules`. It validates:
+
+- MCP stdio client can attach to the existing 9333 relay in client mode
+- `webmcp_list_sources` sees the ComfyWorkflowStudio browser tab
+- `webmcp_list_tools` reports all six Studio tools
+- MCP `tools/list` exposes those six dynamic browser tools
+
+To also invoke a real GPT Director task:
+
+```bat
+tools\webmcp\test-relay.cmd gdt-0123456789abcdef0123456789abcdef
+```
+
+To verify a selected source page returns real MCP `ImageContent`:
+
+```bat
+tools\webmcp\test-relay.cmd gdt-0123456789abcdef0123456789abcdef 4
+```
+
+The page number must be in that task's `selectedPages`; otherwise the Studio API will correctly reject it.
