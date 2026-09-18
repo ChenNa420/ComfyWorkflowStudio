@@ -485,7 +485,7 @@ async function collectGptStoryOnce(taskId:string,useLatest=false){
   const value=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/collect-story`,{gptUrl:url,useLatest})
   if(value.pending)return false
   await loadDirectorTask(taskId)
-  notice.value=value.repairMethod==='local_jsonrepair'
+  notice.value=String(value.repairMethod||'').startsWith('local_')
     ? `GPT JSON 已在本地自动修复并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
     : value.repairMethod==='gpt_then_local_jsonrepair'
       ? `GPT JSON 经 GPT 修复后又由本地校正并回传：${value.title||'故事'} · ${value.shotCount||0} 个镜头。`
