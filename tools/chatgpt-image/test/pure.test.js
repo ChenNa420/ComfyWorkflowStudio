@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates, parseStoryJson, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
+import { candidateKey, diffCandidates, parseStoryJson, parseStoryJsonDetailed, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -87,9 +87,22 @@ test("parses fenced story JSON and validates production shape", () => {
   assert.equal(validateStoryResult(value), value);
 });
 
-test("story parser rejects malformed JSON and repair prompt carries original text", () => {
-  const malformed = '{"creativeStory":{"title":"Demo"},"shots":[{"shotId":"S01","english":"Bobo, "wait!""}]}';
-  assert.throws(() => parseStoryJson(malformed), /invalid JSON/);
+test("story parser locally repairs unescaped dialogue quotes without changing content", () => {
+  const malformed = '{"sourceUnderstanding":{},"creativeStory":{"title":"Demo"},"characterDefinitions":[],"sceneDefinitions":[],"shots":[{"shotId":"S01","english":"Bobo, "wait!"","imagePrompt":"frame","videoPrompt":"motion","sourcePages":[1]}]}';
+  const parsed = parseStoryJsonDetailed(malformed);
+  assert.equal(parsed.repaired, true);
+  assert.equal(parsed.repairMethod, "local_jsonrepair");
+  assert.equal(parsed.value.shots[0].english, 'Bobo, "wait!"');
+  assert.equal(parsed.value.shots[0].imagePrompt, "frame");
+  assert.equal(validateStoryResult(parsed.value), parsed.value);
+});
+
+test("story parser still rejects text that contains no JSON object", () => {
+  assert.throws(() => parseStoryJson("not json at all"), /does not contain a JSON object/);
+});
+
+test("GPT repair prompt remains available as the last-resort fallback", () => {
+  const malformed = '{"english":"Bobo, "wait!""}';
   const prompt = storyRepairPrompt("Unexpected token", malformed);
   assert.match(prompt, /只修复 JSON 语法/);
   assert.match(prompt, /待修复原文开始/);
