@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
-import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, parseableJsonResponse, validateProductionResult, isNewAssistantResponse, jsonRepairPrompt } from '../gpt-director-runner.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, parseableJsonResponse, validateProductionResult, isNewAssistantResponse, jsonRepairPrompt, waitForTools } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -90,6 +90,46 @@ test('recycled assistant node counts as a new response when text changes', () =>
   assert.equal(isNewAssistantResponse(1, 'new answer', baseline), true)
   assert.equal(isNewAssistantResponse(1, 'old answer', baseline), false)
   assert.equal(isNewAssistantResponse(2, 'another answer', baseline), true)
+})
+
+test('director relay discovery primes browser source and management tools before tools/list', async () => {
+  const calls = []
+  const required = [
+    'get_comic_story_task',
+    'get_comic_story_page',
+    'import_gpt_story',
+    'complete_gpt_story_task',
+  ]
+  const client = {
+    async callTool(request) {
+      calls.push(request.name)
+      if (request.name === 'webmcp_list_sources') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ sources: [{ origin: 'http://127.0.0.1:5174' }] }),
+          }],
+        }
+      }
+      if (request.name === 'webmcp_list_tools') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ tools: required.map((name) => ({ name })) }),
+          }],
+        }
+      }
+      throw new Error('unexpected tool call: ' + request.name)
+    },
+    async listTools() {
+      calls.push('tools/list')
+      return { tools: required.map((name) => ({ name })) }
+    },
+  }
+
+  const found = await waitForTools(client, 1000)
+  assert.deepEqual(Object.keys(found).sort(), required.slice().sort())
+  assert.deepEqual(calls, ['webmcp_list_sources', 'webmcp_list_tools', 'tools/list'])
 })
 
 test('parseableJsonResponse accepts any complete JSON object without implying production validity', () => {
