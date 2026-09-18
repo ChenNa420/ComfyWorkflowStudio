@@ -35,7 +35,7 @@ test('vision parseArgs rejects missing page', () => {
 })
 
 test('parseJsonObject accepts fenced JSON', () => {
-  const value = parseJsonObject('\\`\\`\\`json\n{"page":7,"visibleSummary":"ok"}\n\\`\\`\\`')
+  const value = parseJsonObject("```json\\n{\"page\":7,\"visibleSummary\":\"ok\"}\\n```")
   assert.equal(value.page, 7)
   assert.equal(value.visibleSummary, 'ok')
 })
