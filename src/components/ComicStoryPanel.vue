@@ -359,7 +359,7 @@ async function createTask(){
     backendConnected.value=true;gptResult.value=null
     localStorage.setItem('cws-gpt-director-last-task-id',activeTask.value!.id)
     localStorage.removeItem('cws-gpt-director-auto-job-id')
-    notice.value='手动 GPT Task 已创建。下一步：打开所选源页，在童语工坊上传图片并粘贴任务说明；完成后把 JSON 粘贴回工作台。'
+    notice.value='GPT Task 已创建。下一步点击“准备到童语工坊 GPT”；你手动发送后，工作台会自动等待并回传结果。'
     persistBridgeState()
     return true
   }catch(value){backendConnected.value=false;error.value=value instanceof Error?value.message:'创建任务失败';return false}finally{loading.value=''}
@@ -754,7 +754,7 @@ onUnmounted(()=>{storyWatchNonce++;collectingGpt.value=false;lifecycle.abort()})
     </section>
 
     <section class="step-strip panel">
-      <div v-for="item in [{n:1,t:'选择漫画',s:'选择来源 PDF'},{n:2,t:'选择页面与改编',s:'1–12 页任意选择'},{n:3,t:'准备到 GPT',s:'自动上传源页 + 填写提示词'},{n:4,t:'导入结果',s:'故事、分镜与提示词'}]" :key="item.n" :class="['step-card',{active:workflowStep===item.n,done:workflowStep>item.n}]">
+      <div v-for="item in [{n:1,t:'选择漫画',s:'选择来源 PDF'},{n:2,t:'选择页面与改编',s:'1–12 页任意选择'},{n:3,t:'准备到 GPT',s:'自动上传源页 + 填写提示词'},{n:4,t:'自动回传',s:'校验故事、分镜与提示词'}]" :key="item.n" :class="['step-card',{active:workflowStep===item.n,done:workflowStep>item.n}]">
         <span>{{item.n}}</span><div><b>{{item.t}}</b><small>{{item.s}}</small></div>
       </div>
     </section>
