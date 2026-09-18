@@ -8,6 +8,7 @@
 - Certified Production Run、串行任务、输出与素材管理
 - 本地漫画扫描、页面预览、GPT Director Story/Shot/Episode
 - WebMCP 将所选漫画页以 ImageContent 交给“童语工坊 · AI动画编剧导演”并接收 Story / Shots / Prompts
+- 普通 Chrome/Edge 本地开发时通过 MCP-B 5.1.0 补齐 `document.modelContext`，并可桥接到 `127.0.0.1:9333` 的本地 MCP relay
 - ChatGPT Web Image Worker 通过本地 Chrome CDP 生成 Shot 关键帧并回填到 Studio
 - ComfyUI 继续负责后续工作流执行；图片引擎不依赖 OpenAI API Key
 
@@ -25,7 +26,30 @@ Windows：
 start-workbench.cmd
 ```
 
-它只启动 Studio API（8100）和 Web（5174），并检测 ComfyUI（8188）和 ChatGPT Image CDP（9222）。不会启动或关闭 ComfyUI，也不使用 LM Studio。
+它只启动 Studio API（8100）和 Web（5174），并检测 ComfyUI（8188）、ChatGPT Image CDP（9222）和 WebMCP Relay（9333）。不会自动启动或关闭 ComfyUI，也不使用 LM Studio。
+
+## 普通浏览器 WebMCP
+
+在本地 `127.0.0.1:5174` / `localhost:5174` 上，Studio 会尝试加载固定版本的 MCP-B 浏览器兼容层：
+
+- `@mcp-b/global@5.1.0`
+- `@mcp-b/webmcp-local-relay@5.1.0` browser embed
+
+因此普通 Chrome/Edge 即使没有原生 WebMCP，`document.modelContext.registerTool` 也可以由 MCP-B polyfill 提供。Relay 只指向本机 `ws://127.0.0.1:9333`。
+
+如需给标准 MCP Client 暴露当前浏览器标签页里的 Studio tools，使用：
+
+```text
+tools/webmcp/mcp-client-config.example.json
+```
+
+或在 Node.js 22+ 环境运行：
+
+```bat
+tools\webmcp\start-local-relay.cmd
+```
+
+Relay 只允许 `http://127.0.0.1:5174` 和 `http://localhost:5174`，没有使用 `origin=*`。详细说明见 `tools/webmcp/README.md`。
 
 ## GPT Director / 童语工坊 GPT
 
