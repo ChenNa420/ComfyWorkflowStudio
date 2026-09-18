@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates, parseStoryJson, parseStoryJsonDetailed, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
+import { candidateKey, diffCandidates, normalizeStoryResultShape, parseStoryJson, parseStoryJsonDetailed, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -103,6 +103,49 @@ test("story parser keeps punctuation after repaired dialogue quotes", () => {
   assert.equal(parsed.repaired, true);
   assert.equal(parsed.value.shots[0].english, 'He said "wait!", then ran.');
   assert.equal(validateStoryResult(parsed.value), parsed.value);
+});
+
+test("normalizes harmless GPT extras before strict backend import", () => {
+  const raw = {
+    sourceUnderstanding: { selectedPages: [5] },
+    creativeStory: {
+      title: "Demo",
+      summary: "summary",
+      story: "story",
+      adaptationNotes: "single note",
+      unexpected: "drop me",
+    },
+    characterDefinitions: [{ key: "mimi", extra: true }],
+    sceneDefinitions: [{ key: "meadow", extra: true }],
+    shots: [{
+      shotId: "S01",
+      title: "Shot",
+      duration: 5,
+      storyPurpose: "purpose",
+      speaker: null,
+      english: "Hello",
+      chinese: "你好",
+      keyframeDescription: "frame",
+      imagePrompt: "frame prompt",
+      videoPrompt: "video prompt",
+      negativePrompt: "",
+      sourcePages: [5],
+      extraShotField: "drop me",
+    }],
+    episode: { shouldNotReachBackend: true },
+  };
+  const normalized = normalizeStoryResultShape(raw);
+  assert.deepEqual(Object.keys(normalized).sort(), [
+    "characterDefinitions",
+    "creativeStory",
+    "sceneDefinitions",
+    "shots",
+    "sourceUnderstanding",
+  ]);
+  assert.deepEqual(normalized.creativeStory.adaptationNotes, ["single note"]);
+  assert.equal(Object.hasOwn(normalized.creativeStory, "unexpected"), false);
+  assert.equal(Object.hasOwn(normalized.shots[0], "extraShotField"), false);
+  assert.equal(validateStoryResult(normalized), normalized);
 });
 
 test("story parser still rejects text that contains no JSON object", () => {
