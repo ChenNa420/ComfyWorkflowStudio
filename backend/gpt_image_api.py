@@ -16,6 +16,15 @@ def gpt_image_router() -> APIRouter:
     router = APIRouter(prefix='/api/gpt-image', tags=['gpt-image'])
     service = GPTImageService(ROOT)
 
+    def public_frame(value: dict) -> dict:
+        return {key: item for key, item in value.items() if key != 'relativePath'}
+
+    def public_job(value: dict) -> dict:
+        result = dict(value)
+        if isinstance(result.get('frame'), dict):
+            result['frame'] = public_frame(result['frame'])
+        return result
+
     def fail(exc: GPTImageError):
         status = (
             404 if exc.code in {'TASK_NOT_FOUND', 'SHOT_NOT_FOUND', 'JOB_NOT_FOUND', 'FRAME_NOT_FOUND', 'FRAME_FILE_MISSING'}
@@ -45,21 +54,21 @@ def gpt_image_router() -> APIRouter:
     @router.post('/tasks/{task_id}/shots/{shot_id}/generate')
     def generate(task_id: str, shot_id: str, payload: GenerateFrameRequest):
         try:
-            return service.create_job(task_id, shot_id, replace=payload.replace)
+            return public_job(service.create_job(task_id, shot_id, replace=payload.replace))
         except GPTImageError as exc:
             fail(exc)
 
     @router.get('/jobs/{job_id}')
     def job(job_id: str):
         try:
-            return service.get_job(job_id)
+            return public_job(service.get_job(job_id))
         except GPTImageError as exc:
             fail(exc)
 
     @router.get('/tasks/{task_id}/frames')
     def frames(task_id: str):
         try:
-            return {'taskId': task_id, 'frames': service.frames(task_id)}
+            return {'taskId': task_id, 'frames': [public_frame(item) for item in service.frames(task_id)]}
         except GPTImageError as exc:
             fail(exc)
 
