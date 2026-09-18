@@ -34,6 +34,16 @@ test('persistent relay launcher uses pinned local CLI instead of npx', async () 
   assert.match(script, /node_modules\\@mcp-b\\webmcp-local-relay\\dist\\cli\.mjs/)
   assert.doesNotMatch(script, /npx\s+-y\s+@mcp-b\/webmcp-local-relay/)
 })
+test('workbench starts pinned relay directly and records startup diagnostics', async () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const script = await fs.readFile(path.resolve(here, '../../../start-workbench.ps1'), 'utf8')
+  assert.match(script, /tools\\webmcp\\node_modules\\@mcp-b\\webmcp-local-relay\\dist\\cli\.mjs/)
+  assert.match(script, /Start-Process -FilePath \$nodeExe/)
+  assert.match(script, /webmcp-relay\.stderr\.log/)
+  assert.match(script, /Relay process exited with code/)
+  assert.match(script, /Is-ProjectProcess \$relayOwner 'relay'/)
+  assert.doesNotMatch(script, /start-local-relay\.cmd/)
+})
 
 
 test('vision parseArgs requires task and page', () => {
