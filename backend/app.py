@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from backend.bindings import bindings_router
 from backend.comic_story_api import comic_story_router
 from backend.gpt_image_api import gpt_image_router
+from backend.gpt_director_auto_api import gpt_director_auto_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
@@ -276,6 +277,7 @@ def create_app() -> FastAPI:
 
     app.include_router(comic_story_router())
     app.include_router(gpt_image_router())
+    app.include_router(gpt_director_auto_router())
     app.include_router(workflow_knowledge_router(db))
     app.include_router(workflow_dependencies_router())
     app.include_router(manifest_review_router(db))
