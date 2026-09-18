@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+node_modules/
+dist/
+.vite/
+database/*.sqlite3
+database/*.sqlite3-*
+storage/**
+!storage/.gitkeep
+workflows/**/runtime/
+workflows/**/outputs/
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
