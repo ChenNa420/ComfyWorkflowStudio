@@ -215,6 +215,10 @@ export function escapeBareQuotesInJsonStrings(text) {
   let escaped = false;
 
   const isWhitespace = (value) => /\s/.test(value || "");
+  const startsJsonLiteral = (index) => {
+    const tail = source.slice(index);
+    return /^(?:true|false|null)(?=\s*[,\]}]|\s*$)/.test(tail);
+  };
   const commaLooksStructural = (index) => {
     let cursor = index + 1;
     while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
@@ -226,7 +230,8 @@ export function escapeBareQuotesInJsonStrings(text) {
       || next === "]"
       || next === "}"
       || next === "-"
-      || /[0-9tfn]/i.test(next);
+      || /[0-9]/.test(next)
+      || startsJsonLiteral(cursor);
   };
 
   for (let index = 0; index < source.length; index += 1) {
