@@ -224,11 +224,13 @@ class GPTImageServiceTests(unittest.TestCase):
             'ok': True,
             'pending': False,
             'repaired': True,
+            'repairMethod': 'local_jsonrepair',
             'result': make_result().model_dump(mode='json'),
         }
         value = self.service.collect_story(task.id)
         self.assertFalse(value['pending'])
         self.assertTrue(value['repaired'])
+        self.assertEqual(value['repairMethod'], 'local_jsonrepair')
         self.assertEqual(value['status'], 'COMPLETED')
         self.assertEqual(value['title'], 'Demo')
         self.assertEqual(value['shotCount'], 1)
