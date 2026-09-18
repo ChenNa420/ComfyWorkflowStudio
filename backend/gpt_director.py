@@ -160,6 +160,39 @@ class GPTDirectorStore:
         self._atomic_write(self._directory(task.id) / 'task.json', task.model_dump(mode='json'))
         return task
 
+    @staticmethod
+    def source_token_for_path(path: Path) -> str:
+        resolved = path.resolve()
+        return hashlib.sha256(str(resolved).encode('utf-8', errors='ignore')).hexdigest()[:24]
+
+    def bind_local_source(self, task_id: str, token: str, source_path: Path) -> None:
+        resolved = source_path.resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError(str(resolved))
+        if self.source_token_for_path(resolved) != token:
+            raise ValueError('GPT Director source token does not match local path')
+        self._atomic_write(
+            self._directory(task_id) / 'source.local.json',
+            {'token': token, 'path': str(resolved)},
+        )
+
+    def resolve_local_source(self, task_id: str, token: str) -> Path:
+        binding_path = self._directory(task_id) / 'source.local.json'
+        if not binding_path.is_file():
+            raise FileNotFoundError('gpt_director_source_binding_not_found')
+        try:
+            payload = json.loads(binding_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError('invalid GPT Director local source binding') from exc
+        if payload.get('token') != token or not isinstance(payload.get('path'), str):
+            raise ValueError('invalid GPT Director local source binding')
+        resolved = Path(payload['path']).expanduser().resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError('gpt_director_source_file_not_found')
+        if self.source_token_for_path(resolved) != token:
+            raise ValueError('GPT Director local source binding token mismatch')
+        return resolved
+
     def load_task(self, task_id: str) -> GPTDirectorTask:
         path = self._directory(task_id) / 'task.json'
         if not path.is_file():
