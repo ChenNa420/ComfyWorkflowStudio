@@ -21,6 +21,7 @@ from backend.gpt_director import (
     GPTDirectorConflict, GPTDirectorPage, GPTDirectorResultImport, GPTDirectorSource,
     GPTDirectorStore, GPTDirectorTaskCreate, build_episode_candidate,
 )
+from backend.gpt_source_image_probe import authorize_source_page
 
 SUPPORTED_FILES = {'.pdf', '.cbz', '.zip', '.png', '.jpg', '.jpeg', '.webp'}
 IMAGE_FILES = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -313,6 +314,20 @@ def comic_story_router() -> APIRouter:
     @router.get('/gpt-director/tasks/{task_id}')
     def get_gpt_director_task(task_id: str):
         return director_payload(task_id)
+
+    @router.get('/gpt-director/tasks/{task_id}/pages/{page_number}/image')
+    def get_gpt_director_source_page(task_id: str, page_number: int):
+        try:
+            task = director_store.load_task(task_id)
+            source_page = authorize_source_page(task, page_number)
+        except ValueError as exc:
+            detail = 'invalid_gpt_director_task_id' if 'taskId' in str(exc) else str(exc)
+            raise HTTPException(status_code=400, detail=detail) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail='gpt_director_task_not_found') from exc
+        return comic_page(source_page.token, source_page.page, thumbnail=False)
 
     @router.post('/gpt-director/tasks/{task_id}/result')
     def import_gpt_director_result(task_id: str, payload: GPTDirectorResultImport):
