@@ -43,14 +43,20 @@ export class ImageGenerator {
   check(timeoutMs = 20000) {
     return this.serialize(async () => {
       const page = await this.session.getPage(this.config.chatgptUrl);
-      return new ChatGPTPage(page, this.config).assertReady(timeoutMs);
+      return {
+        ...(await new ChatGPTPage(page, this.config).assertReady(timeoutMs)),
+        browserMode: this.session.mode,
+      };
     });
   }
 
   login() {
     return this.serialize(async () => {
       const page = await this.session.getPage(this.config.chatgptUrl);
-      return new ChatGPTPage(page, this.config).waitForLogin(this.config.loginTimeoutMs);
+      return {
+        ...(await new ChatGPTPage(page, this.config).waitForLogin(this.config.loginTimeoutMs)),
+        browserMode: this.session.mode,
+      };
     });
   }
 
@@ -63,7 +69,7 @@ export class ImageGenerator {
       const page = await this.session.getPage(this.config.chatgptUrl);
       const candidate = await new ChatGPTPage(page, this.config).generate(prompt);
       const image = await captureImage(page, candidate, outputDir, this.config.maxImageBytes);
-      return { ok: true, jobId, promptLength: prompt.length, image };
+      return { ok: true, jobId, promptLength: prompt.length, browserMode: this.session.mode, image };
     });
   }
 
