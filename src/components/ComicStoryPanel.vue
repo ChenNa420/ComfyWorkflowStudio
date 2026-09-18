@@ -352,7 +352,7 @@ function pageRef(page:number){return `P${String(page).padStart(3,'0')}`}
 async function loadDirectorAutoStatus(){
   try{
     const value=await getJson('/api/gpt-director-auto/status')
-    directorAutoStatus.value={...directorAutoStatus.value,...value,message:value.ready?'基础运行环境已就绪；开始创作时会再校验 ChatGPT 登录会话。':!value.relayReady?'WebMCP Relay 未连接。':!value.cdpReady?'ChatGPT 专用 Chrome 未连接。':'自动创作依赖未就绪。'}
+    directorAutoStatus.value={...directorAutoStatus.value,...value,message:value.ready?'基础运行环境已就绪；正式任务会直接尝试连接童语工坊 GPT。':!value.relayReady?'WebMCP Relay 未连接。':!value.cdpReady?'ChatGPT 专用 Chrome 未连接。':'自动创作依赖未就绪。'}
   }catch(value){
     directorAutoStatus.value={...directorAutoStatus.value,ready:false,message:value instanceof Error?value.message:'自动创作状态读取失败'}
   }
@@ -377,23 +377,6 @@ async function pollDirectorAutoJob(jobId:string){
   throw new Error('GPT 自动创作等待超时，请稍后刷新页面查看任务状态。')
 }
 
-async function ensureDirectorChatGptReady(){
-  let lastError=''
-  for(let attempt=0;attempt<4;attempt++){
-    try{
-      const check=await postJson('/api/gpt-image/check',{})
-      if(check.ready&&check.authenticated)return true
-      lastError='ChatGPT 会话尚未就绪。'
-    }catch(value){
-      lastError=value instanceof Error?value.message:'ChatGPT 检测失败'
-    }
-    if(attempt<3)await sleep(1800)
-  }
-  const loginRequired=/LOGIN_REQUIRED|sign.?in|log.?in|登录|prompt box is unavailable/i.test(lastError)
-  if(loginRequired)throw new Error('专用 Chrome 已连接，但当前 ChatGPT 会话未检测到登录状态。若窗口里已经登录，请等待页面完全加载后再点一次；正常情况下登录会保存在专用 profile，不需要每次重新登录。')
-  throw new Error(`ChatGPT 专用 Chrome 检测失败：${lastError||'未知错误'}`)
-}
-
 async function startDirectorAuto(){
   if(!activeTask.value)throw new Error('请先创建 GPT Director Task。')
   await loadDirectorAutoStatus()
@@ -407,7 +390,7 @@ async function startDirectorAuto(){
     }
   }
   if(!directorAutoStatus.value.cdpReady)throw new Error('ChatGPT 专用 Chrome 未就绪，请打开后重试。')
-  await ensureDirectorChatGptReady()
+  notice.value='正在连接童语工坊 GPT，并准备上传全部选中漫画页…'
   const job=await postJson(`/api/gpt-director-auto/tasks/${encodeURIComponent(activeTask.value.id)}/run`,{})
   directorAutoJob.value=job
   localStorage.setItem('cws-gpt-director-auto-job-id',job.jobId)
