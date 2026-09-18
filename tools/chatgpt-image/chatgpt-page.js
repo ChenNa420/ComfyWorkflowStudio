@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { ImageWorkerError } from "./errors.js";
 
 export const IMAGE_SELECTOR = "main img, [role='main'] img, article img";
@@ -184,6 +186,137 @@ async function waitForNewImage(page, beforeKeys, timeoutMs) {
   throw new ImageWorkerError("Timed out waiting for a newly generated ChatGPT image", "IMAGE_GENERATION_TIMEOUT");
 }
 
+function textHash(text) {
+  return createHash("sha256").update(String(text || ""), "utf8").digest("hex");
+}
+
+async function assistantSnapshot(page) {
+  const turns = page.locator("[data-message-author-role='assistant']");
+  const count = await turns.count().catch(() => 0);
+  const text = count > 0 ? (await turns.last().innerText().catch(() => "")).trim() : "";
+  return { count, text, lastHash: textHash(text) };
+}
+
+async function isGenerating(page) {
+  const locators = page.locator(SELECTORS.generating);
+  const count = await locators.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    if (await locators.nth(index).isVisible().catch(() => false)) return true;
+  }
+  return false;
+}
+
+export function parseStoryJson(text) {
+  const raw = String(text || "").trim();
+  const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    throw new ImageWorkerError("GPT response does not contain a JSON object", "DIRECTOR_INVALID_JSON");
+  }
+  try {
+    return JSON.parse(unfenced.slice(start, end + 1));
+  } catch (error) {
+    throw new ImageWorkerError(
+      "GPT returned invalid JSON: " + String(error?.message || error),
+      "DIRECTOR_INVALID_JSON",
+    );
+  }
+}
+
+export function validateStoryResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ImageWorkerError("Production result must be a JSON object", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "error")) {
+    throw new ImageWorkerError("Production result returned an error object", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  if (!value.sourceUnderstanding || typeof value.sourceUnderstanding !== "object" || Array.isArray(value.sourceUnderstanding)) {
+    throw new ImageWorkerError("Production result is missing sourceUnderstanding", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  if (!value.creativeStory || typeof value.creativeStory !== "object" || Array.isArray(value.creativeStory)) {
+    throw new ImageWorkerError("Production result is missing creativeStory", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  if (!Array.isArray(value.characterDefinitions) || !Array.isArray(value.sceneDefinitions)) {
+    throw new ImageWorkerError("Production result is missing characterDefinitions or sceneDefinitions", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  if (!Array.isArray(value.shots) || value.shots.length < 1 || value.shots.length > 24) {
+    throw new ImageWorkerError("Production result shots must contain 1-24 items", "DIRECTOR_INVALID_PRODUCTION_JSON");
+  }
+  const ids = new Set();
+  for (const [index, shot] of value.shots.entries()) {
+    if (!shot || typeof shot !== "object" || Array.isArray(shot)) {
+      throw new ImageWorkerError(`Shot ${index + 1} must be an object`, "DIRECTOR_INVALID_PRODUCTION_JSON");
+    }
+    const shotId = String(shot.shotId ?? "").trim();
+    if (!shotId || ids.has(shotId)) {
+      throw new ImageWorkerError(`Invalid or duplicate shotId at shot ${index + 1}`, "DIRECTOR_INVALID_PRODUCTION_JSON");
+    }
+    ids.add(shotId);
+    if (!String(shot.imagePrompt || "").trim() || !String(shot.videoPrompt || "").trim()) {
+      throw new ImageWorkerError(`Shot ${shotId} is missing imagePrompt or videoPrompt`, "DIRECTOR_INVALID_PRODUCTION_JSON");
+    }
+    if (!Array.isArray(shot.sourcePages) || !shot.sourcePages.length) {
+      throw new ImageWorkerError(`Shot ${shotId} is missing sourcePages`, "DIRECTOR_INVALID_PRODUCTION_JSON");
+    }
+  }
+  return value;
+}
+
+export function storyRepairPrompt(parseError, originalText) {
+  return [
+    "你刚才返回的内容外形是 JSON，但无法被标准 JSON.parse() 解析。",
+    "下面附上刚才完整原文。只修复 JSON 语法，不改变故事、角色、场景、镜头数量、对白和各类 Prompt 内容。",
+    "重点检查 JSON 字符串内部的英文双引号，必须写成 \\"。",
+    '例如不能写： "english": "Bobo, "wait!""',
+    '必须写成： "english": "Bobo, \\"wait!\\""。',
+    "不要解释，不要 Markdown 代码围栏，只返回一个完整合法 JSON 对象。",
+    parseError ? "解析错误：" + String(parseError).slice(0, 500) : "",
+    "",
+    "===== 待修复原文开始 =====",
+    String(originalText || ""),
+    "===== 待修复原文结束 =====",
+  ].filter(Boolean).join("\n");
+}
+
+async function waitForAssistantChange(page, baseline, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let stableHash = "";
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    const current = await assistantSnapshot(page);
+    const changed = current.count > Number(baseline?.count || 0)
+      || (current.text && current.lastHash !== String(baseline?.lastHash || ""));
+    if (changed) {
+      const generating = await isGenerating(page);
+      if (current.lastHash === stableHash) {
+        if (!stableSince) stableSince = Date.now();
+      } else {
+        stableHash = current.lastHash;
+        stableSince = Date.now();
+      }
+      if (!generating && current.text && Date.now() - stableSince >= 1800) return current;
+    }
+    await page.waitForTimeout(650);
+  }
+  throw new ImageWorkerError("Timed out waiting for repaired GPT story JSON", "DIRECTOR_JSON_REPAIR_TIMEOUT");
+}
+
+async function sendRepair(page, originalText, parseError) {
+  const baseline = await assistantSnapshot(page);
+  const box = await findPromptBox(page, 20000);
+  const prompt = storyRepairPrompt(parseError, originalText);
+  try { await box.fill(prompt); }
+  catch {
+    await box.click();
+    await page.keyboard.insertText(prompt);
+  }
+  const send = page.locator(SELECTORS.send).last();
+  if ((await send.count()) > 0 && (await send.isVisible().catch(() => false))) await send.click();
+  else await page.keyboard.press("Enter");
+  return waitForAssistantChange(page, baseline, 180000);
+}
+
 async function uploadFiles(page, filePaths) {
   if (!Array.isArray(filePaths) || !filePaths.length) {
     throw new ImageWorkerError("At least one source image is required", "SOURCE_IMAGES_REQUIRED");
@@ -228,6 +361,7 @@ export class ChatGPTPage {
 
   async prepareDraft(prompt, filePaths) {
     await assertAuthenticated(this.page, 20000);
+    const assistantBaseline = await assistantSnapshot(this.page);
     await uploadFiles(this.page, filePaths);
     const box = await findPromptBox(this.page, 20000);
     try { await box.fill(prompt); }
@@ -242,6 +376,46 @@ export class ChatGPTPage {
       sent: false,
       attachmentCount: filePaths.length,
       promptLength: String(prompt || "").length,
+      assistantBaseline: { count: assistantBaseline.count, lastHash: assistantBaseline.lastHash },
+      url: this.page.url(),
+    };
+  }
+
+  async collectStory(baseline) {
+    await assertAuthenticated(this.page, 20000);
+    const current = await assistantSnapshot(this.page);
+    const changed = current.count > Number(baseline?.count || 0)
+      || (current.text && current.lastHash !== String(baseline?.lastHash || ""));
+    if (!changed || await isGenerating(this.page)) {
+      return { ok: true, pending: true, repaired: false };
+    }
+
+    let result;
+    let repaired = false;
+    try {
+      result = validateStoryResult(parseStoryJson(current.text));
+    } catch (error) {
+      if (!(error instanceof ImageWorkerError) || error.code !== "DIRECTOR_INVALID_JSON") throw error;
+      const repairedReply = await sendRepair(this.page, current.text, error.message);
+      try {
+        result = validateStoryResult(parseStoryJson(repairedReply.text));
+        repaired = true;
+      } catch (secondError) {
+        if (secondError instanceof ImageWorkerError && secondError.code === "DIRECTOR_INVALID_JSON") {
+          throw new ImageWorkerError(
+            "GPT returned invalid JSON after one automatic repair: " + secondError.message,
+            "DIRECTOR_JSON_REPAIR_FAILED",
+          );
+        }
+        throw secondError;
+      }
+    }
+    return {
+      ok: true,
+      pending: false,
+      repaired,
+      result,
+      assistant: { count: current.count, lastHash: current.lastHash },
       url: this.page.url(),
     };
   }
