@@ -15,6 +15,14 @@ if %NODE_MAJOR% LSS 22 (
   exit /b 1
 )
 
+set "RELAY_CLI=%~dp0node_modules\@mcp-b\webmcp-local-relay\dist\cli.mjs"
+if not exist "%RELAY_CLI%" (
+  echo [FAIL] WebMCP relay dependency is missing:
+  echo        %RELAY_CLI%
+  echo Run: npm install --prefix tools\webmcp
+  exit /b 1
+)
+
 echo Starting ComfyWorkflowStudio WebMCP local relay...
 echo Host: 127.0.0.1
 echo Port: 9333
@@ -25,6 +33,6 @@ echo.
 echo Keep this terminal open while testing an MCP client.
 echo.
 
-npx -y @mcp-b/webmcp-local-relay@5.1.0 --host 127.0.0.1 --port 9333 --widget-origin "http://127.0.0.1:5174,http://localhost:5174" --label "ComfyWorkflowStudio"
+node "%RELAY_CLI%" --host 127.0.0.1 --port 9333 --widget-origin "http://127.0.0.1:5174,http://localhost:5174" --label "ComfyWorkflowStudio"
 
 endlocal
