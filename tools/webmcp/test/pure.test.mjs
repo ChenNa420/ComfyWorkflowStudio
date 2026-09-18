@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
-import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse } from '../gpt-director-runner.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, isNewAssistantResponse, jsonRepairPrompt } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -82,4 +82,20 @@ test('completeJsonResponse detects finished production payload', () => {
   assert.equal(completeJsonResponse(text), true)
   assert.equal(completeJsonResponse('{"creativeStory":{"title":"Demo"},"shots":['), false)
   assert.equal(completeJsonResponse('{"creativeStory":{"title":"Demo"},"shots":[]}'), false)
+})
+
+
+test('recycled assistant node counts as a new response when text changes', () => {
+  const baseline = { count: 1, lastText: 'old answer' }
+  assert.equal(isNewAssistantResponse(1, 'new answer', baseline), true)
+  assert.equal(isNewAssistantResponse(1, 'old answer', baseline), false)
+  assert.equal(isNewAssistantResponse(2, 'another answer', baseline), true)
+})
+
+test('json repair prompt preserves content and demands escaped quotes', () => {
+  const prompt = jsonRepairPrompt('Unexpected token')
+  assert.match(prompt, /保持故事、角色、场景、镜头数量、对白/)
+  assert.match(prompt, /只修复 JSON 语法/)
+  assert.match(prompt, /\\\"/)
+  assert.match(prompt, /Unexpected token/)
 })
