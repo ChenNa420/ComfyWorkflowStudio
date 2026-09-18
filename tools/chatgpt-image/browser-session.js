@@ -94,6 +94,18 @@ export class BrowserSession {
     );
   }
 
+  async getExistingChatGPTPage() {
+    const context = await this.getContext();
+    const page = [...context.pages()].reverse().find(isChatGPTPage);
+    if (!page) {
+      throw new ImageWorkerError(
+        "No open ChatGPT page was found in the dedicated browser",
+        "CHATGPT_PAGE_NOT_FOUND",
+      );
+    }
+    return page;
+  }
+
   async getPage(targetUrl) {
     const context = await this.getContext();
     const pages = context.pages();
