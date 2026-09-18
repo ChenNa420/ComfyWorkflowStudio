@@ -12,6 +12,11 @@ class GenerateFrameRequest(BaseModel):
     replace: bool = False
 
 
+class PrepareStoryRequest(BaseModel):
+    prompt: str
+    gptUrl: str | None = None
+
+
 def gpt_image_router() -> APIRouter:
     router = APIRouter(prefix='/api/gpt-image', tags=['gpt-image'])
     service = GPTImageService(ROOT)
@@ -48,6 +53,13 @@ def gpt_image_router() -> APIRouter:
     def login():
         try:
             return service.login()
+        except GPTImageError as exc:
+            fail(exc)
+
+    @router.post('/tasks/{task_id}/prepare-story')
+    def prepare_story(task_id: str, payload: PrepareStoryRequest):
+        try:
+            return service.prepare_story(task_id, payload.prompt, payload.gptUrl)
         except GPTImageError as exc:
             fail(exc)
 
