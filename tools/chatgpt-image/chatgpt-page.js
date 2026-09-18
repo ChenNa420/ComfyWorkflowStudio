@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { jsonrepair } from "jsonrepair";
 
 import { ImageWorkerError } from "./errors.js";
 
@@ -207,7 +208,7 @@ async function isGenerating(page) {
   return false;
 }
 
-export function parseStoryJson(text) {
+export function parseStoryJsonDetailed(text) {
   const raw = String(text || "").trim();
   const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const start = unfenced.indexOf("{");
@@ -215,14 +216,32 @@ export function parseStoryJson(text) {
   if (start < 0 || end <= start) {
     throw new ImageWorkerError("GPT response does not contain a JSON object", "DIRECTOR_INVALID_JSON");
   }
+
+  const candidate = unfenced.slice(start, end + 1);
   try {
-    return JSON.parse(unfenced.slice(start, end + 1));
-  } catch (error) {
-    throw new ImageWorkerError(
-      "GPT returned invalid JSON: " + String(error?.message || error),
-      "DIRECTOR_INVALID_JSON",
-    );
+    return { value: JSON.parse(candidate), repaired: false, repairMethod: null };
+  } catch (parseError) {
+    try {
+      const repairedText = jsonrepair(candidate);
+      return {
+        value: JSON.parse(repairedText),
+        repaired: true,
+        repairMethod: "local_jsonrepair",
+      };
+    } catch (repairError) {
+      throw new ImageWorkerError(
+        "GPT returned invalid JSON: "
+          + String(parseError?.message || parseError)
+          + "; local repair failed: "
+          + String(repairError?.message || repairError),
+        "DIRECTOR_INVALID_JSON",
+      );
+    }
   }
+}
+
+export function parseStoryJson(text) {
+  return parseStoryJsonDetailed(text).value;
 }
 
 export function validateStoryResult(value) {
@@ -508,18 +527,24 @@ export class ChatGPTPage {
 
     let result;
     let repaired = false;
+    let repairMethod = null;
     try {
-      result = validateStoryResult(parseStoryJson(stable.text));
+      const parsed = parseStoryJsonDetailed(stable.text);
+      result = validateStoryResult(parsed.value);
+      repaired = parsed.repaired;
+      repairMethod = parsed.repairMethod;
     } catch (error) {
       if (!(error instanceof ImageWorkerError) || error.code !== "DIRECTOR_INVALID_JSON") throw error;
       const repairedReply = await sendRepair(this.page, stable.text, error.message);
       try {
-        result = validateStoryResult(parseStoryJson(repairedReply.text));
+        const parsed = parseStoryJsonDetailed(repairedReply.text);
+        result = validateStoryResult(parsed.value);
         repaired = true;
+        repairMethod = parsed.repaired ? "gpt_then_local_jsonrepair" : "gpt";
       } catch (secondError) {
         if (secondError instanceof ImageWorkerError && secondError.code === "DIRECTOR_INVALID_JSON") {
           throw new ImageWorkerError(
-            "GPT returned invalid JSON after one automatic repair: " + secondError.message,
+            "GPT returned invalid JSON after local repair and one GPT repair: " + secondError.message,
             "DIRECTOR_JSON_REPAIR_FAILED",
           );
         }
@@ -530,6 +555,7 @@ export class ChatGPTPage {
       ok: true,
       pending: false,
       repaired,
+      repairMethod,
       result,
       assistant: { count: stable.count, lastHash: stable.lastHash },
       url: this.page.url(),
