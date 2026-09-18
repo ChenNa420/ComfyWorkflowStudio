@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { candidateKey, diffCandidates } from "../chatgpt-page.js";
-import { validateChatGPTUrl } from "../config.js";
+import { validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
 
@@ -10,6 +10,14 @@ test("allows only ChatGPT HTTPS URLs", () => {
   assert.equal(new URL(validateChatGPTUrl("https://chatgpt.com/")).hostname, "chatgpt.com");
   assert.throws(() => validateChatGPTUrl("http://chatgpt.com/"));
   assert.throws(() => validateChatGPTUrl("https://example.com/"));
+});
+
+test("allows CDP only on local HTTP(S)", () => {
+  assert.equal(validateCdpUrl(""), "");
+  assert.equal(validateCdpUrl("http://127.0.0.1:9222"), "http://127.0.0.1:9222");
+  assert.equal(validateCdpUrl("http://localhost:9222/"), "http://localhost:9222");
+  assert.throws(() => validateCdpUrl("ws://127.0.0.1:9222"));
+  assert.throws(() => validateCdpUrl("http://192.168.1.5:9222"));
 });
 
 test("candidate diff keeps only unseen images", () => {
