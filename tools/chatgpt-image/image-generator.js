@@ -5,6 +5,54 @@ import { randomUUID } from "node:crypto";
 import { BrowserSession } from "./browser-session.js";
 import { ChatGPTPage } from "./chatgpt-page.js";
 import { captureImage } from "./image-capture.js";
+import { validateChatGPTUrl } from "./config.js";
+import { ImageWorkerError } from "./errors.js";
+
+export function validateSourcePageUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || ""));
+  } catch {
+    throw new ImageWorkerError("Invalid source page URL", "INVALID_SOURCE_PAGE_URL");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "http:" || !["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) {
+    throw new ImageWorkerError("Source page URL must use local HTTP", "INVALID_SOURCE_PAGE_URL");
+  }
+  return parsed.toString();
+}
+
+function extensionForContentType(value) {
+  const mime = String(value || "").split(";", 1)[0].trim().toLowerCase();
+  if (mime === "image/png") return "png";
+  if (mime === "image/webp") return "webp";
+  if (mime === "image/jpeg" || mime === "image/jpg") return "jpg";
+  throw new ImageWorkerError("Unsupported source page image MIME", "SOURCE_IMAGE_MIME_UNSUPPORTED");
+}
+
+async function downloadSourcePages(outputDir, sources) {
+  if (!Array.isArray(sources) || !sources.length) {
+    throw new ImageWorkerError("No source pages were provided", "SOURCE_IMAGES_REQUIRED");
+  }
+  const files = [];
+  for (const source of sources) {
+    const page = Number(source?.page);
+    const url = validateSourcePageUrl(source?.url);
+    const response = await fetch(url, { headers: { "Accept": "image/png,image/webp,image/jpeg" } });
+    if (!response.ok) {
+      throw new ImageWorkerError(`Source page ${page || "?"} download failed (${response.status})`, "SOURCE_IMAGE_DOWNLOAD_FAILED");
+    }
+    const extension = extensionForContentType(response.headers.get("content-type"));
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length) {
+      throw new ImageWorkerError(`Source page ${page || "?"} is empty`, "SOURCE_IMAGE_EMPTY");
+    }
+    const filePath = path.join(outputDir, `page-${String(page || files.length + 1).padStart(3, "0")}.${extension}`);
+    await fs.writeFile(filePath, bytes);
+    files.push(filePath);
+  }
+  return files;
+}
 
 export function composeGenerationPrompt(input) {
   const sections = [
@@ -56,6 +104,27 @@ export class ImageGenerator {
       return {
         ...(await new ChatGPTPage(page, this.config).waitForLogin(this.config.loginTimeoutMs)),
         browserMode: this.session.mode,
+      };
+    });
+  }
+
+  prepareStory(input) {
+    return this.serialize(async () => {
+      const prompt = String(input?.prompt || "").trim();
+      if (!prompt) throw new ImageWorkerError("Story prompt is required", "STORY_PROMPT_REQUIRED");
+      const targetUrl = validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl));
+      const jobId = randomUUID();
+      const outputDir = path.join(this.config.outputDir, "story-drafts", jobId);
+      await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
+      const files = await downloadSourcePages(outputDir, input?.sourcePages || []);
+      const page = await this.session.getPage(targetUrl);
+      const prepared = await new ChatGPTPage(page, this.config).prepareDraft(prompt, files);
+      return {
+        ...prepared,
+        ok: true,
+        jobId,
+        browserMode: this.session.mode,
+        sourcePages: (input?.sourcePages || []).map((item) => Number(item?.page)).filter(Number.isInteger),
       };
     });
   }
