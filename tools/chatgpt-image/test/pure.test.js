@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates } from "../chatgpt-page.js";
+import { candidateKey, diffCandidates, sessionPayloadAuthenticated } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -57,4 +57,12 @@ test("maps supported image MIME extensions", () => {
   assert.equal(extensionForMime("image/jpeg"), "jpg");
   assert.equal(extensionForMime("image/webp"), "webp");
   assert.equal(extensionForMime("image/png"), "png");
+});
+
+
+test("detects persisted ChatGPT session payload", () => {
+  assert.equal(sessionPayloadAuthenticated({ user: { id: "user-1" }, expires: "2099-01-01" }), true);
+  assert.equal(sessionPayloadAuthenticated({ user: { email: "a@example.test" } }), true);
+  assert.equal(sessionPayloadAuthenticated({}), false);
+  assert.equal(sessionPayloadAuthenticated(null), false);
 });
