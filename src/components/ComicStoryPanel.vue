@@ -63,6 +63,15 @@ const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
 const webMcpAvailable = ref(false)
 const webMcpRegistered = ref(false)
 const webMcpError = ref('')
+const webMcpRuntime = ref<any>((window as any).__cwsWebMcpRuntime||{
+  mode:'unavailable',
+  nativeDetected:false,
+  modelContextAvailable:false,
+  relayEmbedLoaded:false,
+  relayEndpoint:'ws://127.0.0.1:9333',
+  runtimeSource:'No WebMCP runtime',
+  error:'',
+})
 const backendConnected = ref(false)
 const registeredToolCount = ref(0)
 const lastToolCall = ref<{tool:string;timestamp:string;success:boolean;message:string}|null>(null)
@@ -111,6 +120,12 @@ const settings = ref({
 })
 
 const workflowStep = computed(()=>gptResult.value?4:activeTask.value?3:selectedIssue.value?2:1)
+const webMcpRuntimeLabel = computed(()=>{
+  if(webMcpRuntime.value.mode==='native')return '浏览器原生 WebMCP + MCP-B Bridge'
+  if(webMcpRuntime.value.mode==='mcp-b-polyfill')return 'MCP-B Polyfill'
+  return 'WebMCP Runtime 不可用'
+})
+const webMcpRelayLabel = computed(()=>webMcpRuntime.value.relayEmbedLoaded?'Relay Embed 已加载 · 127.0.0.1:9333':'Relay 未加载')
 const previewUrl = computed(()=>selectedIssue.value ? `/api/comic-story/page/${selectedIssue.value.token}/${currentPage.value}` : '')
 const selectedPagesSorted = computed(()=>[...selectedPages.value].sort((a,b)=>a-b))
 const selectedPagesText = computed(()=>selectedPagesSorted.value.join(', ') || '尚未选择')
@@ -546,10 +561,11 @@ async function sourcePageImageResult(taskId:string,page:number,visualValidation=
 }
 
 async function registerWebMcp(){
+  webMcpRuntime.value=(window as any).__cwsWebMcpRuntime||webMcpRuntime.value
   const context=(document as any).modelContext
   webMcpAvailable.value=!!context?.registerTool
   registeredToolCount.value=0
-  if(!context?.registerTool){webMcpError.value='当前浏览器没有 document.modelContext.registerTool；可使用复制任务说明 + 手动导入 JSON。';return}
+  if(!context?.registerTool){webMcpError.value=webMcpRuntime.value.error||'当前浏览器没有可用的 WebMCP Runtime；可使用复制任务说明 + 手动导入 JSON。';return}
   try{
     lifecycle.abort();lifecycle=new AbortController()
     await Promise.all([
@@ -657,7 +673,12 @@ onUnmounted(()=>lifecycle.abort())
       </div>
       <div :class="['bridge-pill',{ok:webMcpRegistered}]">
         <Wifi v-if="webMcpRegistered" :size="16"/><WifiOff v-else :size="16"/>
-        <div><b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b><small>{{webMcpRegistered?'6 个工具已注册（含漫画页 ImageContent）':'可使用复制/导入备用流程'}}</small></div>
+        <div>
+          <b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b>
+          <small v-if="webMcpRegistered">6/6 工具 · {{webMcpRuntimeLabel}}</small>
+          <small v-else>{{webMcpRuntimeLabel}}</small>
+          <small>{{webMcpRelayLabel}}</small>
+        </div>
       </div>
     </section>
 
