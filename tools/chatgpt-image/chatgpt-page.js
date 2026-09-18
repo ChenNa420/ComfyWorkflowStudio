@@ -267,7 +267,7 @@ export function storyRepairPrompt(parseError, originalText) {
   return [
     "你刚才返回的内容外形是 JSON，但无法被标准 JSON.parse() 解析。",
     "下面附上刚才完整原文。只修复 JSON 语法，不改变故事、角色、场景、镜头数量、对白和各类 Prompt 内容。",
-    "重点检查 JSON 字符串内部的英文双引号，必须写成 \\"。",
+    '重点检查 JSON 字符串内部的英文双引号，必须写成 \\"。',
     '例如不能写： "english": "Bobo, "wait!""',
     '必须写成： "english": "Bobo, \\"wait!\\""。',
     "不要解释，不要 Markdown 代码围栏，只返回一个完整合法 JSON 对象。",
