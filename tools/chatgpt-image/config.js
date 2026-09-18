@@ -6,6 +6,7 @@ import { ImageWorkerError } from "./errors.js";
 const toolRoot = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(toolRoot, "../..");
 export const DEFAULT_CHATGPT_IMAGE_URL = "https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan";
+export const DEFAULT_CHATGPT_IMAGE_CDP_URL = "http://127.0.0.1:9222";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -45,11 +46,13 @@ export function validateCdpUrl(value) {
 }
 
 export function loadConfig(env = process.env) {
+  const cdpValue = String(env.CWS_CHATGPT_IMAGE_CDP_URL ?? DEFAULT_CHATGPT_IMAGE_CDP_URL).trim();
+  const cdpUrl = /^(off|none|disabled)$/i.test(cdpValue) ? "" : validateCdpUrl(cdpValue);
   return {
     profileDir: path.resolve(env.CWS_CHATGPT_IMAGE_PROFILE_DIR || path.join(repoRoot, "storage", "chatgpt-image-browser", "profile")),
     outputDir: path.resolve(env.CWS_CHATGPT_IMAGE_OUTPUT_DIR || path.join(repoRoot, "storage", "chatgpt-image-worker")),
     chatgptUrl: validateChatGPTUrl(env.CWS_CHATGPT_IMAGE_URL || DEFAULT_CHATGPT_IMAGE_URL),
-    cdpUrl: validateCdpUrl(env.CWS_CHATGPT_IMAGE_CDP_URL || ""),
+    cdpUrl,
     browserChannel: env.CWS_CHATGPT_IMAGE_CHANNEL || "chrome",
     headless: env.CWS_CHATGPT_IMAGE_HEADLESS === "1",
     timeoutMs: positiveInt(env.CWS_CHATGPT_IMAGE_TIMEOUT_MS, 240000, 30000, 600000),
