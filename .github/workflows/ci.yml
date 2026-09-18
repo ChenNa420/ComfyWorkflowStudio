@@ -10,7 +10,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
       - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: npm }
+        with: { node-version: '24', cache: npm }
       - run: npm ci
+      - run: npm install --prefix tools/chatgpt-image
+      - run: npm test --prefix tools/chatgpt-image
+      - run: npm install --prefix tools/webmcp
+      - run: npm test --prefix tools/webmcp
       - run: npm run typecheck
       - run: npm run build

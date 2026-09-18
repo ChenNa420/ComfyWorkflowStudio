@@ -58,10 +58,20 @@ const activeTask = ref<DirectorTask|null>(null)
 const gptResult = ref<DirectorResult|null>(null)
 const manualJson = ref('')
 const promptCopied = ref(false)
-const gptUrl = ref('')
+const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
+const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
 const webMcpAvailable = ref(false)
 const webMcpRegistered = ref(false)
 const webMcpError = ref('')
+const webMcpRuntime = ref<any>((window as any).__cwsWebMcpRuntime||{
+  mode:'unavailable',
+  nativeDetected:false,
+  modelContextAvailable:false,
+  relayEmbedLoaded:false,
+  relayEndpoint:'ws://127.0.0.1:9333',
+  runtimeSource:'No WebMCP runtime',
+  error:'',
+})
 const backendConnected = ref(false)
 const registeredToolCount = ref(0)
 const lastToolCall = ref<{tool:string;timestamp:string;success:boolean;message:string}|null>(null)
@@ -71,6 +81,27 @@ const keyframeProbe = ref<ProbeSummary>({status:'NOT_RUN',argumentType:'—',con
 type SourceImageProbeStatus = 'NOT_RUN'|'IMAGE_CONTENT'|'RESOURCE_LINK'|'IMAGE_URL'|'VISIBLE_TO_GPT'|'NOT_VISIBLE'|'FAILED'
 type SourceImageProbeSummary = {status:SourceImageProbeStatus;page:number|null;mime:string|null;bytes:number|null;encodedSize:number|null;transferMode:string;gptVisualValidation:boolean|null;message:string}
 const sourceImageProbe = ref<SourceImageProbeSummary>({status:'NOT_RUN',page:null,mime:null,bytes:null,encodedSize:null,transferMode:'—',gptVisualValidation:null,message:'尚未运行'})
+
+type ImageFrameState = {
+  shotId:string
+  status:string
+  frameAssetId?:string
+  sha256?:string
+  mime?:string
+  width?:number
+  height?:number
+  captureMethod?:string
+  generatedAt?:string
+  url?:string
+}
+type ImageJobState = { jobId:string; status:string; errorCode?:string|null; errorMessage?:string|null }
+const imageEngine = ref({
+  node:false, worker:false, dependencies:false, profileExists:false, readyForCheck:false,
+  browserMode:'cdp', cdpUrl:'http://127.0.0.1:9222', gptUrl:DEFAULT_GPT_DIRECTOR_URL,
+  chatgptReady:false, checking:false, message:'尚未检测',
+})
+const frameStateByShot = ref<Record<string,ImageFrameState>>({})
+const frameJobByShot = ref<Record<string,ImageJobState>>({})
 let lifecycle = new AbortController()
 
 const settings = ref({
@@ -89,6 +120,12 @@ const settings = ref({
 })
 
 const workflowStep = computed(()=>gptResult.value?4:activeTask.value?3:selectedIssue.value?2:1)
+const webMcpRuntimeLabel = computed(()=>{
+  if(webMcpRuntime.value.mode==='native')return '浏览器原生 WebMCP + MCP-B Bridge'
+  if(webMcpRuntime.value.mode==='mcp-b-polyfill')return 'MCP-B Polyfill'
+  return 'WebMCP Runtime 不可用'
+})
+const webMcpRelayLabel = computed(()=>webMcpRuntime.value.relayEmbedLoaded?'Relay Embed 已加载 · 127.0.0.1:9333':'Relay 未加载')
 const previewUrl = computed(()=>selectedIssue.value ? `/api/comic-story/page/${selectedIssue.value.token}/${currentPage.value}` : '')
 const selectedPagesSorted = computed(()=>[...selectedPages.value].sort((a,b)=>a-b))
 const selectedPagesText = computed(()=>selectedPagesSorted.value.join(', ') || '尚未选择')
@@ -112,7 +149,8 @@ const estimatedShots = computed(()=>{
 })
 const directorPrompt = computed(()=>{
   if(!activeTask.value)return ''
-  return `你正在为 ComfyWorkflowStudio 执行 GPT Director Task ${activeTask.value.id}。\n\n请先调用 WebMCP 工具 get_comic_story_task，taskId=${activeTask.value.id}，读取漫画来源、选中页和改编设置。\n\n目标：理解选中漫画页面中的故事与画面关系，然后重新创作成适合儿童英语动画的“自己的故事”。不要机械翻译或逐格复刻。可以参考原画面的氛围和构图，但新故事、角色与对白必须遵循任务中的改编设置。\n\n请自动决定合理镜头数量，不固定 6 镜头。每个镜头生成 title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。sourcePages 只能引用任务选中的页。\n\n如果当前环境无法直接看到 page imageUrl，请先让我上传任务中的选中页图片，不要猜画面内容。\n\n完成后调用 import_gpt_story 写回完整结果，最后调用 complete_gpt_story_task。不要调用 ComfyUI，不要生成视频。`
+  const pages=activeTask.value.source.selectedPages.join(', ')
+  return `你正在为 ComfyWorkflowStudio 执行 GPT Director Task ${activeTask.value.id}。\n\n第一步调用 WebMCP 工具 get_comic_story_task，taskId=${activeTask.value.id}，读取漫画来源、选中页和改编设置。\n\n然后必须逐页调用 get_comic_story_page 读取全部 selectedPages（当前为：${pages}）。只有全部页面都成功获得真实 ImageContent 后，才能开始理解和创作；不要根据文件名、URL 或 metadata 猜画面。\n\n目标：综合理解这些漫画页面中的角色、动作、场景、页间故事关系、视觉氛围和构图关系，然后重新创作成适合儿童英语动画的“自己的故事”。不要机械翻译或逐格复刻。可以参考原画面的氛围和构图，但新故事、角色与对白必须遵循任务中的改编设置。\n\n请自动决定合理镜头数量，不固定 6 镜头。每个镜头生成 title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。sourcePages 只能引用任务选中的页。\n\n完成后调用 import_gpt_story 写回完整结果，最后调用 complete_gpt_story_task。不要调用 ComfyUI，不要生成视频。`
 })
 
 function formatBytes(value:number){
@@ -134,6 +172,91 @@ async function getJson(url:string){
   const payload=await response.json().catch(()=>({}))
   if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail?.code||payload?.detail||`HTTP ${response.status}`)
   return payload
+}
+
+function sleep(ms:number){return new Promise(resolve=>window.setTimeout(resolve,ms))}
+
+async function loadImageEngineStatus(){
+  try{
+    const value=await getJson('/api/gpt-image/status')
+    imageEngine.value={...imageEngine.value,...value,message:value.readyForCheck?'图片引擎已安装。打开专用 Chrome 后点击“检测登录”。':'需要先安装 tools/chatgpt-image 依赖。'}
+  }catch(value){
+    imageEngine.value={...imageEngine.value,message:value instanceof Error?value.message:'图片引擎状态读取失败'}
+  }
+}
+
+async function checkImageEngine(){
+  imageEngine.value={...imageEngine.value,checking:true,message:'正在检测专用 ChatGPT 浏览器…'}
+  try{
+    const value=await postJson('/api/gpt-image/check',{})
+    imageEngine.value={...imageEngine.value,chatgptReady:!!value.ready,checking:false,message:value.ready?'ChatGPT 图片浏览器已登录并可用。':'ChatGPT 图片浏览器尚未就绪。'}
+  }catch(value){
+    imageEngine.value={...imageEngine.value,chatgptReady:false,checking:false,message:value instanceof Error?value.message:'ChatGPT 图片浏览器检测失败'}
+  }
+}
+
+async function startImageLogin(){
+  try{
+    await postJson('/api/gpt-image/login',{})
+    imageEngine.value={...imageEngine.value,message:'已启动专用 Chrome，并打开“童语工坊 · AI动画编剧导演”。请保持窗口开启，登录后点击“检测登录”。'}
+  }catch(value){
+    error.value=value instanceof Error?value.message:'无法启动 ChatGPT 登录浏览器'
+  }
+}
+
+async function loadFrameStates(taskId:string){
+  try{
+    const value=await getJson(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/frames`)
+    const next:Record<string,ImageFrameState>={}
+    for(const item of value.frames||[])next[String(item.shotId)]=item
+    frameStateByShot.value=next
+  }catch{
+    frameStateByShot.value={}
+  }
+}
+
+function frameState(shot:DirectorShot){return frameStateByShot.value[String(shot.shotId)]}
+function frameJob(shot:DirectorShot){return frameJobByShot.value[String(shot.shotId)]}
+function framePreviewUrl(shot:DirectorShot){
+  const frame=frameState(shot)
+  return frame?.url?`${frame.url}?v=${(frame.sha256||frame.generatedAt||'1').slice(0,12)}`:`/api/comic-story/page/${selectedIssue.value?.token}/${shot.sourcePages[0]}`
+}
+
+async function pollFrameJob(shotId:string,jobId:string){
+  for(let attempt=0;attempt<330;attempt++){
+    await sleep(2000)
+    const value=await getJson(`/api/gpt-image/jobs/${encodeURIComponent(jobId)}`)
+    frameJobByShot.value={...frameJobByShot.value,[shotId]:value}
+    if(value.status==='COMPLETED'){
+      if(activeTask.value)await loadFrameStates(activeTask.value.id)
+      notice.value=`Shot ${shotId} 关键帧已由 ChatGPT 生成并保存到工作台。`
+      return
+    }
+    if(value.status==='FAILED'){
+      throw new Error(value.errorMessage||value.errorCode||'关键帧生成失败')
+    }
+  }
+  throw new Error('关键帧任务等待超时，请稍后刷新状态。')
+}
+
+async function generateShotFrame(shot:DirectorShot){
+  if(!activeTask.value)return
+  const shotId=String(shot.shotId)
+  const existing=frameState(shot)?.status==='IMPORTED'
+  let replace=false
+  if(existing){
+    replace=window.confirm(`Shot ${shotId} 已有关键帧。确认重新生成并在成功后替换旧图吗？`)
+    if(!replace)return
+  }
+  error.value=''
+  try{
+    const job=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(activeTask.value.id)}/shots/${encodeURIComponent(shotId)}/generate`,{replace})
+    frameJobByShot.value={...frameJobByShot.value,[shotId]:job}
+    notice.value=`Shot ${shotId} 已进入 ChatGPT 图片生成队列。`
+    await pollFrameJob(shotId,job.jobId)
+  }catch(value){
+    error.value=value instanceof Error?value.message:'关键帧生成失败'
+  }
 }
 
 async function loadSuggestedRoots(){
@@ -170,6 +293,8 @@ function chooseIssue(item:Issue){
   selectedPages.value=[1]
   activeTask.value=null
   gptResult.value=null
+  frameStateByShot.value={}
+  frameJobByShot.value={}
   manualJson.value=''
   error.value=''
   notice.value=''
@@ -182,6 +307,8 @@ function clearIssue(resetCollection=true){
   selectedPages.value=[]
   activeTask.value=null
   gptResult.value=null
+  frameStateByShot.value={}
+  frameJobByShot.value={}
   manualJson.value=''
   if(resetCollection){notice.value=''}
   persistBridgeState()
@@ -214,7 +341,7 @@ function selectCurrentPage(){
 function saveGptUrl(){
   const value=gptUrl.value.trim()
   try{localStorage.setItem('cws-gpt-director-url',value)}catch{}
-  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已清空 GPT 页面地址，将打开 ChatGPT 首页。'
+  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已恢复默认“童语工坊 · AI动画编剧导演”地址。'
 }
 
 function pageRef(page:number){return `P${String(page).padStart(3,'0')}`}
@@ -298,6 +425,8 @@ async function loadDirectorTask(taskId:string){
   activeTask.value=task as DirectorTask
   gptResult.value=result||null
   backendConnected.value=true
+  if(result)await loadFrameStates(taskId)
+  else frameStateByShot.value={}
   if(episodeCandidate)sessionStorage.setItem('cws-comic-story-episode',JSON.stringify(episodeCandidate))
   return payload
 }
@@ -341,7 +470,7 @@ async function openGpt(){
   if(!activeTask.value)await createTask()
   if(!activeTask.value)return
   await copyTaskPrompt()
-  let url=gptUrl.value.trim()||'https://chatgpt.com/'
+  let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
   if(!/^https?:\/\//i.test(url))url=`https://${url}`
   window.open(url,'_blank','noopener,noreferrer')
 }
@@ -354,7 +483,7 @@ function persistBridgeState(){
 
 async function restoreBridgeState(){
   try{
-    gptUrl.value=localStorage.getItem('cws-gpt-director-url')||''
+    gptUrl.value=localStorage.getItem('cws-gpt-director-url')||DEFAULT_GPT_DIRECTOR_URL
     const source=sessionStorage.getItem('cws-gpt-director-source')
     if(source){const parsed=JSON.parse(source);selectedIssue.value=parsed.issue||null;selectedPages.value=Array.isArray(parsed.selectedPages)?parsed.selectedPages:[];currentPage.value=Number(parsed.currentPage)||1}
     sessionStorage.removeItem('cws-gpt-director-task');sessionStorage.removeItem('cws-gpt-director-result')
@@ -418,7 +547,11 @@ async function sourcePageImageResult(taskId:string,page:number,visualValidation=
   if(!/^gdt-[a-f0-9]{32}$/.test(taskId))throw new Error('Invalid GPT Director task')
   if(!Number.isInteger(page)||page<1)throw new Error('Invalid source page')
   const response=await fetch(`/api/comic-story/gpt-director/tasks/${encodeURIComponent(taskId)}/pages/${page}/image`,{credentials:'same-origin'})
-  if(!response.ok)throw new Error(`Source page request failed (${response.status})`)
+  if(!response.ok){
+    const payload=await response.json().catch(()=>({}))
+    const detail=typeof payload?.detail==='string'?payload.detail:payload?.detail?.message||payload?.detail?.code||''
+    throw new Error(`Source page request failed (${response.status})${detail?`: ${detail}`:''}`)
+  }
   const mime=(response.headers.get('content-type')||'').split(';',1)[0].toLowerCase()
   if(!['image/jpeg','image/png','image/webp'].includes(mime))throw new Error('Unsupported source image MIME')
   const bytes=await response.arrayBuffer()
@@ -432,10 +565,11 @@ async function sourcePageImageResult(taskId:string,page:number,visualValidation=
 }
 
 async function registerWebMcp(){
+  webMcpRuntime.value=(window as any).__cwsWebMcpRuntime||webMcpRuntime.value
   const context=(document as any).modelContext
   webMcpAvailable.value=!!context?.registerTool
   registeredToolCount.value=0
-  if(!context?.registerTool){webMcpError.value='当前浏览器没有 document.modelContext.registerTool；可使用复制任务说明 + 手动导入 JSON。';return}
+  if(!context?.registerTool){webMcpError.value=webMcpRuntime.value.error||'当前浏览器没有可用的 WebMCP Runtime；可使用复制任务说明 + 手动导入 JSON。';return}
   try{
     lifecycle.abort();lifecycle=new AbortController()
     await Promise.all([
@@ -446,6 +580,15 @@ async function registerWebMcp(){
         annotations:{readOnlyHint:true},
         async execute(input:any){
           return trackTool('get_comic_story_task',()=>getJson(`/api/comic-story/gpt-director/tasks/${encodeURIComponent(String(input?.taskId||''))}`))
+        },
+      },{signal:lifecycle.signal})),
+      Promise.resolve(context.registerTool({
+        name:'get_comic_story_page',
+        description:'读取 GPT Director Task 中一张已选择漫画页的真实图像。返回 WebMCP ImageContent；只能读取 selectedPages 中的页。',
+        inputSchema:{type:'object',properties:{taskId:{type:'string'},page:{type:'integer',minimum:1}},required:['taskId','page'],additionalProperties:false},
+        annotations:{readOnlyHint:true},
+        async execute(input:any){
+          return trackTool('get_comic_story_page',()=>sourcePageImageResult(String(input?.taskId||''),Number(input?.page),false))
         },
       },{signal:lifecycle.signal})),
       Promise.resolve(context.registerTool({
@@ -492,7 +635,7 @@ async function registerWebMcp(){
       },{signal:lifecycle.signal})),
     ])
     webMcpRegistered.value=true
-    registeredToolCount.value=5
+    registeredToolCount.value=6
     webMcpError.value=''
   }catch(value){
     webMcpRegistered.value=false
@@ -506,6 +649,7 @@ onMounted(async()=>{
   await loadSuggestedRoots()
   await restoreBridgeState()
   await registerWebMcp()
+  await loadImageEngineStatus()
 })
 const keyframeProbePrompt = computed(()=>{
   if(!activeTask.value)return ''
@@ -533,7 +677,12 @@ onUnmounted(()=>lifecycle.abort())
       </div>
       <div :class="['bridge-pill',{ok:webMcpRegistered}]">
         <Wifi v-if="webMcpRegistered" :size="16"/><WifiOff v-else :size="16"/>
-        <div><b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b><small>{{webMcpRegistered?'5 个工具已注册（含开发期 Probe）':'可使用复制/导入备用流程'}}</small></div>
+        <div>
+          <b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b>
+          <small v-if="webMcpRegistered">6/6 工具 · {{webMcpRuntimeLabel}}</small>
+          <small v-else>{{webMcpRuntimeLabel}}</small>
+          <small>{{webMcpRelayLabel}}</small>
+        </div>
       </div>
     </section>
 
@@ -638,8 +787,48 @@ onUnmounted(()=>lifecycle.abort())
         <div class="section-title"><div><span class="step-number">4</span><div><h3>{{gptResult?'GPT 已返回故事与分镜':'等待 GPT 返回结果'}}</h3><p>{{gptResult?'结果已写入当前 Session，可以继续进入分镜与动画生产。':'WebMCP 成功时会自动回填；否则可使用下方手动导入 JSON。'}}</p></div></div><span v-if="gptResult" class="ready-pill">{{gptResult.shots.length}} Shots · READY</span></div>
 
         <template v-if="gptResult">
+          <div class="image-engine-panel">
+            <div>
+              <b>ChatGPT 图片引擎</b>
+              <small>{{imageEngine.chatgptReady?'Ready':imageEngine.readyForCheck?'待检测登录':'未安装'}} · Chrome CDP · 固定童语工坊 GPT · 串行生成</small>
+              <p>{{imageEngine.message}}</p>
+            </div>
+            <div class="image-engine-actions">
+              <button class="secondary small" :disabled="!imageEngine.readyForCheck" @click="startImageLogin">打开专用 Chrome</button>
+              <button class="secondary small" :disabled="!imageEngine.readyForCheck||imageEngine.checking" @click="checkImageEngine"><LoaderCircle v-if="imageEngine.checking" class="spin" :size="13"/><RefreshCw v-else :size="13"/>检测登录</button>
+            </div>
+          </div>
           <div class="result-overview"><article><span>故事标题</span><b>{{gptResult.creativeStory.title}}</b><p>{{gptResult.creativeStory.summary||gptResult.creativeStory.story||'—'}}</p></article><article><span>角色</span><b>{{gptResult.characterDefinitions?.length||0}}</b><p>统一角色定义将交给后续角色管理与关键帧流程。</p></article><article><span>场景</span><b>{{gptResult.sceneDefinitions?.length||0}}</b><p>场景与镜头 sourcePages 保持可追溯。</p></article><article><span>镜头</span><b>{{gptResult.shots.length}}</b><p>动态镜头数量，不固定 6 个。</p></article></div>
-          <div class="returned-shots"><article v-for="(shot,index) in gptResult.shots" :key="String(shot.shotId)"><div class="shot-thumb"><img :src="`/api/comic-story/page/${selectedIssue.token}/${shot.sourcePages[0]}`"/><span>S{{String(index+1).padStart(2,'0')}}</span></div><div><b>{{shot.title}}</b><p>{{shot.chinese||shot.storyPurpose||shot.english||'—'}}</p><small>P{{shot.sourcePages.join(', P')}} · {{shot.duration}} 秒 · {{shot.speaker||'无对白/未指定'}}</small><details><summary>查看关键帧与视频提示词</summary><strong>关键帧</strong><p>{{shot.keyframeDescription||'—'}}</p><strong>Image Prompt</strong><p>{{shot.imagePrompt}}</p><strong>Video Prompt</strong><p>{{shot.videoPrompt}}</p></details></div></article></div>
+          <div class="returned-shots">
+            <article v-for="(shot,index) in gptResult.shots" :key="String(shot.shotId)">
+              <div class="shot-thumb">
+                <img :src="framePreviewUrl(shot)"/>
+                <span>S{{String(index+1).padStart(2,'0')}}</span>
+                <em v-if="frameState(shot)?.status==='IMPORTED'">GPT Frame</em>
+              </div>
+              <div>
+                <b>{{shot.title}}</b>
+                <p>{{shot.chinese||shot.storyPurpose||shot.english||'—'}}</p>
+                <small>P{{shot.sourcePages.join(', P')}} · {{shot.duration}} 秒 · {{shot.speaker||'无对白/未指定'}}</small>
+                <div class="frame-actions">
+                  <button class="primary small" :disabled="['QUEUED','RUNNING'].includes(frameJob(shot)?.status||'')" @click="generateShotFrame(shot)">
+                    <LoaderCircle v-if="['QUEUED','RUNNING'].includes(frameJob(shot)?.status||'')" class="spin" :size="13"/>
+                    <Sparkles v-else :size="13"/>
+                    {{frameState(shot)?.status==='IMPORTED'?'重新生成':'生成关键帧'}}
+                  </button>
+                  <span v-if="frameJob(shot)?.status">{{frameJob(shot)?.status}}</span>
+                  <span v-else-if="frameState(shot)?.status==='IMPORTED'">{{frameState(shot)?.width}}×{{frameState(shot)?.height}} · {{frameState(shot)?.captureMethod}}</span>
+                  <span v-else>Not Generated</span>
+                </div>
+                <details>
+                  <summary>查看关键帧与视频提示词</summary>
+                  <strong>关键帧</strong><p>{{shot.keyframeDescription||'—'}}</p>
+                  <strong>Image Prompt</strong><p>{{shot.imagePrompt}}</p>
+                  <strong>Video Prompt</strong><p>{{shot.videoPrompt}}</p>
+                </details>
+              </div>
+            </article>
+          </div>
           <div class="downstream-actions"><button class="secondary" @click="go('characters')">角色管理</button><button class="secondary" @click="go('storyboard')">分镜设计</button><button class="primary" @click="go('workbench')"><Film :size="15"/>进入成片工作台</button></div>
         </template>
 
@@ -653,7 +842,7 @@ onUnmounted(()=>lifecycle.abort())
 </template>
 
 <style scoped>
-.director-shell{display:grid;gap:14px;color:#26324b}.director-hero{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:24px 26px;background:linear-gradient(135deg,#fff 0%,#f5f8ff 58%,#f7f4ff 100%);border:1px solid #e9edf7}.director-hero h2{margin:5px 0 8px;font-size:28px;letter-spacing:-.5px}.director-hero p{margin:0;max-width:820px;color:#6d7893;font-size:12px;line-height:1.7}.eyebrow{font-size:9px;letter-spacing:1.2px;font-weight:800;color:#6a5ee8}.bridge-pill{min-width:220px;display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:13px;background:#fff7f7;border:1px solid #f0dede;color:#a45b63}.bridge-pill.ok{background:#effbf5;border-color:#cdebdc;color:#27845e}.bridge-pill b,.bridge-pill small{display:block}.bridge-pill b{font-size:11px}.bridge-pill small{font-size:9px;margin-top:2px;color:#7f8aa1}.step-strip{display:grid;grid-template-columns:repeat(4,1fr);padding:10px;gap:8px}.step-card{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:13px;border:1px solid transparent;color:#8992a8}.step-card>span{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#edf0f6;font-size:11px;font-weight:800}.step-card b,.step-card small{display:block}.step-card b{font-size:11px}.step-card small{font-size:9px;margin-top:3px}.step-card.active{border-color:#b9c9ff;background:#f4f7ff;color:#305fd8}.step-card.active>span{background:#3477ef;color:#fff;box-shadow:0 6px 14px rgba(52,119,239,.22)}.step-card.done{color:#398067}.step-card.done>span{background:#e3f7ed;color:#27845e}.director-alert{display:flex;align-items:center;gap:8px;margin:0;padding:11px 13px;border-radius:10px;font-size:11px}.director-alert.error{background:#fff2f4;border:1px solid #ffd8df;color:#b8475a}.director-alert.success{background:#effbf5;border:1px solid #d3efdf;color:#277a59}.source-layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,.6fr);gap:14px}.source-picker,.collection-panel,.issue-panel,.page-card,.settings-card,.task-card,.result-stage{padding:18px}.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}.section-title.compact>div:first-child{display:flex;align-items:flex-start;gap:10px}.section-title h3{margin:3px 0 4px;font-size:16px}.section-title p{margin:0;color:#7b859d;font-size:10px;line-height:1.55}.section-title>svg{color:#6a5ee8}.step-number{width:28px;height:28px;flex:0 0 auto;border-radius:50%;display:grid;place-items:center;background:#3477ef;color:#fff;font-size:11px;font-weight:800}.path-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:15px}.path-row input,.issue-filters input,.issue-filters select,.settings-form input,.settings-form select,.gpt-url input,.extra-request textarea,.manual-import textarea{width:100%;min-width:0;border:1px solid #dfe5f1;border-radius:9px;background:#fbfcff;padding:10px;color:#34405c;outline:none}.path-row input:focus,.issue-filters input:focus,.settings-form input:focus,.settings-form select:focus,.gpt-url input:focus,.extra-request textarea:focus,.manual-import textarea:focus{border-color:#7da4f6;box-shadow:0 0 0 3px rgba(79,125,238,.08)}.root-list{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:9px;color:#8a93a9;font-size:9px}.root-list button{border:0;border-radius:8px;background:#f2f4f8;color:#5e6880;padding:6px 8px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}.collection-list{display:grid;gap:7px;margin-top:12px;max-height:300px;overflow:auto}.collection-row{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;gap:9px;align-items:center;border:1px solid #e6eaf2;background:#fff;border-radius:10px;padding:9px;text-align:left;color:#39445f;cursor:pointer}.collection-row.active{border-color:#8ca9ef;background:#f6f8ff}.collection-icon{width:35px;height:35px;border-radius:9px;display:grid;place-items:center;background:#efedff;color:#6657e8}.collection-row b,.collection-row small{display:block}.collection-row b{font-size:10px}.collection-row small{font-size:8px;color:#8b94a9;margin-top:3px}.collection-row>span{font-size:8px;color:#8590aa}.count-pill,.ready-pill{padding:6px 9px;border-radius:999px;background:#eef3ff;color:#456dd1;font-size:9px;font-weight:800}.ready-pill{background:#e7f8ef;color:#21825c}.issue-filters{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:8px;margin-top:12px}.issue-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-top:12px}.issue-card{border:1px solid #e5e9f1;background:#fff;border-radius:11px;padding:8px;text-align:left;cursor:pointer;min-width:0}.issue-card:hover{border-color:#7fa0ee;box-shadow:0 8px 22px rgba(53,73,128,.08)}.cover{position:relative;height:142px;border-radius:8px;overflow:hidden;background:#f2f4f8;display:grid;place-items:center;color:#a0a8bb}.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.issue-card b,.issue-card small{display:block}.issue-card b{font-size:9px;line-height:1.4;margin-top:7px;overflow-wrap:anywhere}.issue-card small{font-size:8px;color:#8c95a9;margin-top:4px}.empty-state{display:flex;align-items:center;justify-content:center;gap:8px;padding:28px;color:#8b94a8;font-size:11px}.workspace-grid{display:grid;grid-template-columns:minmax(360px,1.08fr) minmax(330px,.92fr) minmax(340px,.92fr);gap:14px;align-items:start}.ghost,.secondary,.primary,.gpt-open{border-radius:9px;padding:9px 12px;cursor:pointer;font-weight:700;font-size:10px;display:inline-flex;align-items:center;justify-content:center;gap:6px}.ghost{border:1px solid #e2e7f0;background:#fff;color:#66708a}.secondary{border:1px solid #dce3f2;background:#fff;color:#53607b}.primary{border:0;background:#3477ef;color:#fff;box-shadow:0 6px 14px rgba(52,119,239,.16)}button:disabled{opacity:.5;cursor:not-allowed}.small{padding:7px 9px;font-size:9px}.square{padding:7px;width:32px;height:32px}.page-preview{display:grid;justify-items:center;gap:8px;margin:12px 0}.page-preview>img{max-width:100%;max-height:420px;border-radius:10px;background:#f2f4f8;box-shadow:0 10px 26px rgba(34,47,84,.11)}.page-nav{display:flex;align-items:center;gap:7px}.page-nav b{font-size:10px}.thumb-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:9px 0 7px;font-size:9px;color:#7d879e}.thumb-head b{font-size:10px;color:#44506a}.page-thumbs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;max-height:270px;overflow:auto;padding:2px}.page-thumbs button{position:relative;border:2px solid transparent;background:#f7f8fb;border-radius:8px;padding:4px;cursor:pointer;color:#7e889f}.page-thumbs button.active{border-color:#8ca9ef}.page-thumbs button.selected{border-color:#3477ef;background:#eef4ff}.page-thumbs img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:5px;background:#edf0f5}.page-thumbs span{display:block;font-size:8px;padding-top:3px}.page-thumbs i{position:absolute;right:4px;top:4px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:#3477ef;color:#fff;font-style:normal;font-size:10px}.page-window-note{display:flex;justify-content:space-between;align-items:center;margin-top:7px;color:#8a93a7;font-size:8px}.text-button{border:0;background:transparent;color:#4376dc;font-size:9px;cursor:pointer}.settings-form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.settings-form label,.gpt-url,.extra-request{display:grid;gap:5px;color:#59637b;font-size:9px}.span-two{grid-column:1/-1}.toggle-list{display:grid;gap:7px;margin-top:12px}.toggle-list label{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px;border:1px solid #e9ecf3;border-radius:9px;background:#fcfdff}.toggle-list b,.toggle-list small{display:block}.toggle-list b{font-size:9px}.toggle-list small{font-size:8px;color:#8a93a7;margin-top:2px}.toggle-list input{width:34px;height:18px;accent-color:#3477ef}.extra-request{margin-top:12px}.extra-request textarea{resize:vertical}.estimate-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.estimate-row span{padding:6px 8px;border-radius:8px;background:#f5f7fb;color:#7a849a;font-size:8px}.estimate-row b{color:#485975}.task-create{width:100%;margin-top:14px;padding:12px}.task-summary{margin-top:11px;padding:12px;border:1px solid #dcefe5;background:#f3fbf7;border-radius:11px}.task-status{display:flex;align-items:center;gap:8px;color:#2a865f}.task-status b,.task-status small{display:block}.task-status b{font-size:10px}.task-status small{font-size:8px;color:#82908a;margin-top:2px}.task-summary dl{display:grid;gap:6px;margin:10px 0 0}.task-summary dl>div{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px;font-size:8px}.task-summary dt{color:#8a93a7}.task-summary dd{margin:0;color:#4f5a72;overflow-wrap:anywhere}.gpt-url{margin-top:11px}.task-actions{display:grid;grid-template-columns:1.1fr .9fr;gap:8px;margin-top:9px}.gpt-open{border:0;color:#fff;background:linear-gradient(135deg,#6f48ef,#7d4ee7 55%,#4c6ff0);box-shadow:0 7px 16px rgba(102,72,225,.2)}.mcp-state{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:10px;border:1px solid #f0dfe0;background:#fff7f7;border-radius:10px;color:#a35b61}.mcp-state.ok{border-color:#d4ecdf;background:#f1fbf6;color:#27825c}.mcp-state>div{display:flex;align-items:center;gap:8px}.mcp-state b,.mcp-state small{display:block}.mcp-state b{font-size:9px}.mcp-state small{font-size:7px;color:#818b9f;margin-top:2px;line-height:1.4}.mcp-help{margin:6px 0 0;font-size:8px;line-height:1.5;color:#8a7180}.runtime-diagnostics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:9px 0 0}.runtime-diagnostics>div{padding:7px 8px;border:1px solid #e7eaf2;border-radius:8px;background:#fbfcff;min-width:0}.runtime-diagnostics dt{font-size:7px;color:#8a93a7}.runtime-diagnostics dd{margin:3px 0 0;font-size:8px;color:#46536d;overflow-wrap:anywhere}.probe-diagnostics{margin-top:9px;padding:10px;border:1px dashed #cdd7ec;border-radius:10px;background:#f8faff}.probe-diagnostics>div{display:flex;justify-content:space-between;gap:8px;font-size:9px}.probe-diagnostics>div span{font-weight:800;color:#536cc4}.probe-diagnostics dl{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:8px 0}.probe-diagnostics dl>div{padding:6px;background:#fff;border-radius:7px}.probe-diagnostics dt{font-size:7px;color:#8a93a7}.probe-diagnostics dd{margin:2px 0 0;font-size:8px;overflow-wrap:anywhere}.probe-diagnostics p{font-size:8px;color:#778198}.result-stage{display:grid;gap:13px}.result-overview{display:grid;grid-template-columns:2fr repeat(3,1fr);gap:9px}.result-overview article{padding:12px;border:1px solid #e6eaf2;border-radius:10px;background:#fbfcff}.result-overview span,.result-overview b{display:block}.result-overview span{font-size:8px;color:#8a93a7}.result-overview b{font-size:15px;margin:4px 0;color:#34405c}.result-overview p{margin:0;font-size:8px;line-height:1.5;color:#7c869b}.returned-shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.returned-shots>article{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;padding:9px;border:1px solid #e6eaf2;border-radius:10px}.shot-thumb{position:relative}.shot-thumb img{width:112px;height:82px;object-fit:cover;border-radius:7px;background:#f1f3f7}.shot-thumb span{position:absolute;left:5px;top:5px;padding:3px 5px;border-radius:5px;background:rgba(28,38,60,.78);color:#fff;font-size:8px}.returned-shots b{font-size:10px}.returned-shots p{font-size:8px;line-height:1.5;margin:4px 0;color:#69758d}.returned-shots small{font-size:7px;color:#8d96a9}.returned-shots details{margin-top:6px;font-size:8px}.returned-shots summary{cursor:pointer;color:#4e70c7}.returned-shots details strong{display:block;margin-top:6px}.downstream-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}.waiting-flow{display:flex;align-items:center;justify-content:center;padding:18px 8px}.waiting-flow>div{text-align:center;min-width:120px;color:#919aaf}.waiting-flow>div.active,.waiting-flow>div.done{color:#4774dc}.waiting-flow>div.done{color:#28815c}.waiting-flow span{width:34px;height:34px;margin:0 auto 6px;border-radius:50%;display:grid;place-items:center;background:#edf0f5;font-size:10px;font-weight:800}.waiting-flow .active span{background:#e9f0ff;color:#3477ef}.waiting-flow .done span{background:#e6f7ee;color:#21825c}.waiting-flow b,.waiting-flow small{display:block}.waiting-flow b{font-size:9px}.waiting-flow small{font-size:7px;margin-top:3px}.waiting-flow>i{width:70px;height:1px;background:#dfe4ed}.manual-import{border-top:1px solid #edf0f5;padding-top:11px}.manual-import summary{cursor:pointer;font-size:9px;font-weight:700;color:#5b6881}.manual-import p{font-size:8px;color:#8790a5}.manual-import textarea{resize:vertical;margin-bottom:7px}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.director-shell{display:grid;gap:14px;color:#26324b}.director-hero{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:24px 26px;background:linear-gradient(135deg,#fff 0%,#f5f8ff 58%,#f7f4ff 100%);border:1px solid #e9edf7}.director-hero h2{margin:5px 0 8px;font-size:28px;letter-spacing:-.5px}.director-hero p{margin:0;max-width:820px;color:#6d7893;font-size:12px;line-height:1.7}.eyebrow{font-size:9px;letter-spacing:1.2px;font-weight:800;color:#6a5ee8}.bridge-pill{min-width:220px;display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:13px;background:#fff7f7;border:1px solid #f0dede;color:#a45b63}.bridge-pill.ok{background:#effbf5;border-color:#cdebdc;color:#27845e}.bridge-pill b,.bridge-pill small{display:block}.bridge-pill b{font-size:11px}.bridge-pill small{font-size:9px;margin-top:2px;color:#7f8aa1}.step-strip{display:grid;grid-template-columns:repeat(4,1fr);padding:10px;gap:8px}.step-card{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:13px;border:1px solid transparent;color:#8992a8}.step-card>span{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#edf0f6;font-size:11px;font-weight:800}.step-card b,.step-card small{display:block}.step-card b{font-size:11px}.step-card small{font-size:9px;margin-top:3px}.step-card.active{border-color:#b9c9ff;background:#f4f7ff;color:#305fd8}.step-card.active>span{background:#3477ef;color:#fff;box-shadow:0 6px 14px rgba(52,119,239,.22)}.step-card.done{color:#398067}.step-card.done>span{background:#e3f7ed;color:#27845e}.director-alert{display:flex;align-items:center;gap:8px;margin:0;padding:11px 13px;border-radius:10px;font-size:11px}.director-alert.error{background:#fff2f4;border:1px solid #ffd8df;color:#b8475a}.director-alert.success{background:#effbf5;border:1px solid #d3efdf;color:#277a59}.source-layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,.6fr);gap:14px}.source-picker,.collection-panel,.issue-panel,.page-card,.settings-card,.task-card,.result-stage{padding:18px}.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}.section-title.compact>div:first-child{display:flex;align-items:flex-start;gap:10px}.section-title h3{margin:3px 0 4px;font-size:16px}.section-title p{margin:0;color:#7b859d;font-size:10px;line-height:1.55}.section-title>svg{color:#6a5ee8}.step-number{width:28px;height:28px;flex:0 0 auto;border-radius:50%;display:grid;place-items:center;background:#3477ef;color:#fff;font-size:11px;font-weight:800}.path-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:15px}.path-row input,.issue-filters input,.issue-filters select,.settings-form input,.settings-form select,.gpt-url input,.extra-request textarea,.manual-import textarea{width:100%;min-width:0;border:1px solid #dfe5f1;border-radius:9px;background:#fbfcff;padding:10px;color:#34405c;outline:none}.path-row input:focus,.issue-filters input:focus,.settings-form input:focus,.settings-form select:focus,.gpt-url input:focus,.extra-request textarea:focus,.manual-import textarea:focus{border-color:#7da4f6;box-shadow:0 0 0 3px rgba(79,125,238,.08)}.root-list{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:9px;color:#8a93a9;font-size:9px}.root-list button{border:0;border-radius:8px;background:#f2f4f8;color:#5e6880;padding:6px 8px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}.collection-list{display:grid;gap:7px;margin-top:12px;max-height:300px;overflow:auto}.collection-row{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;gap:9px;align-items:center;border:1px solid #e6eaf2;background:#fff;border-radius:10px;padding:9px;text-align:left;color:#39445f;cursor:pointer}.collection-row.active{border-color:#8ca9ef;background:#f6f8ff}.collection-icon{width:35px;height:35px;border-radius:9px;display:grid;place-items:center;background:#efedff;color:#6657e8}.collection-row b,.collection-row small{display:block}.collection-row b{font-size:10px}.collection-row small{font-size:8px;color:#8b94a9;margin-top:3px}.collection-row>span{font-size:8px;color:#8590aa}.count-pill,.ready-pill{padding:6px 9px;border-radius:999px;background:#eef3ff;color:#456dd1;font-size:9px;font-weight:800}.ready-pill{background:#e7f8ef;color:#21825c}.issue-filters{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:8px;margin-top:12px}.issue-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-top:12px}.issue-card{border:1px solid #e5e9f1;background:#fff;border-radius:11px;padding:8px;text-align:left;cursor:pointer;min-width:0}.issue-card:hover{border-color:#7fa0ee;box-shadow:0 8px 22px rgba(53,73,128,.08)}.cover{position:relative;height:142px;border-radius:8px;overflow:hidden;background:#f2f4f8;display:grid;place-items:center;color:#a0a8bb}.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.issue-card b,.issue-card small{display:block}.issue-card b{font-size:9px;line-height:1.4;margin-top:7px;overflow-wrap:anywhere}.issue-card small{font-size:8px;color:#8c95a9;margin-top:4px}.empty-state{display:flex;align-items:center;justify-content:center;gap:8px;padding:28px;color:#8b94a8;font-size:11px}.workspace-grid{display:grid;grid-template-columns:minmax(360px,1.08fr) minmax(330px,.92fr) minmax(340px,.92fr);gap:14px;align-items:start}.ghost,.secondary,.primary,.gpt-open{border-radius:9px;padding:9px 12px;cursor:pointer;font-weight:700;font-size:10px;display:inline-flex;align-items:center;justify-content:center;gap:6px}.ghost{border:1px solid #e2e7f0;background:#fff;color:#66708a}.secondary{border:1px solid #dce3f2;background:#fff;color:#53607b}.primary{border:0;background:#3477ef;color:#fff;box-shadow:0 6px 14px rgba(52,119,239,.16)}button:disabled{opacity:.5;cursor:not-allowed}.small{padding:7px 9px;font-size:9px}.square{padding:7px;width:32px;height:32px}.page-preview{display:grid;justify-items:center;gap:8px;margin:12px 0}.page-preview>img{max-width:100%;max-height:420px;border-radius:10px;background:#f2f4f8;box-shadow:0 10px 26px rgba(34,47,84,.11)}.page-nav{display:flex;align-items:center;gap:7px}.page-nav b{font-size:10px}.thumb-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:9px 0 7px;font-size:9px;color:#7d879e}.thumb-head b{font-size:10px;color:#44506a}.page-thumbs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;max-height:270px;overflow:auto;padding:2px}.page-thumbs button{position:relative;border:2px solid transparent;background:#f7f8fb;border-radius:8px;padding:4px;cursor:pointer;color:#7e889f}.page-thumbs button.active{border-color:#8ca9ef}.page-thumbs button.selected{border-color:#3477ef;background:#eef4ff}.page-thumbs img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:5px;background:#edf0f5}.page-thumbs span{display:block;font-size:8px;padding-top:3px}.page-thumbs i{position:absolute;right:4px;top:4px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:#3477ef;color:#fff;font-style:normal;font-size:10px}.page-window-note{display:flex;justify-content:space-between;align-items:center;margin-top:7px;color:#8a93a7;font-size:8px}.text-button{border:0;background:transparent;color:#4376dc;font-size:9px;cursor:pointer}.settings-form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.settings-form label,.gpt-url,.extra-request{display:grid;gap:5px;color:#59637b;font-size:9px}.span-two{grid-column:1/-1}.toggle-list{display:grid;gap:7px;margin-top:12px}.toggle-list label{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px;border:1px solid #e9ecf3;border-radius:9px;background:#fcfdff}.toggle-list b,.toggle-list small{display:block}.toggle-list b{font-size:9px}.toggle-list small{font-size:8px;color:#8a93a7;margin-top:2px}.toggle-list input{width:34px;height:18px;accent-color:#3477ef}.extra-request{margin-top:12px}.extra-request textarea{resize:vertical}.estimate-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.estimate-row span{padding:6px 8px;border-radius:8px;background:#f5f7fb;color:#7a849a;font-size:8px}.estimate-row b{color:#485975}.task-create{width:100%;margin-top:14px;padding:12px}.task-summary{margin-top:11px;padding:12px;border:1px solid #dcefe5;background:#f3fbf7;border-radius:11px}.task-status{display:flex;align-items:center;gap:8px;color:#2a865f}.task-status b,.task-status small{display:block}.task-status b{font-size:10px}.task-status small{font-size:8px;color:#82908a;margin-top:2px}.task-summary dl{display:grid;gap:6px;margin:10px 0 0}.task-summary dl>div{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px;font-size:8px}.task-summary dt{color:#8a93a7}.task-summary dd{margin:0;color:#4f5a72;overflow-wrap:anywhere}.gpt-url{margin-top:11px}.task-actions{display:grid;grid-template-columns:1.1fr .9fr;gap:8px;margin-top:9px}.gpt-open{border:0;color:#fff;background:linear-gradient(135deg,#6f48ef,#7d4ee7 55%,#4c6ff0);box-shadow:0 7px 16px rgba(102,72,225,.2)}.mcp-state{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:10px;border:1px solid #f0dfe0;background:#fff7f7;border-radius:10px;color:#a35b61}.mcp-state.ok{border-color:#d4ecdf;background:#f1fbf6;color:#27825c}.mcp-state>div{display:flex;align-items:center;gap:8px}.mcp-state b,.mcp-state small{display:block}.mcp-state b{font-size:9px}.mcp-state small{font-size:7px;color:#818b9f;margin-top:2px;line-height:1.4}.mcp-help{margin:6px 0 0;font-size:8px;line-height:1.5;color:#8a7180}.runtime-diagnostics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:9px 0 0}.runtime-diagnostics>div{padding:7px 8px;border:1px solid #e7eaf2;border-radius:8px;background:#fbfcff;min-width:0}.runtime-diagnostics dt{font-size:7px;color:#8a93a7}.runtime-diagnostics dd{margin:3px 0 0;font-size:8px;color:#46536d;overflow-wrap:anywhere}.probe-diagnostics{margin-top:9px;padding:10px;border:1px dashed #cdd7ec;border-radius:10px;background:#f8faff}.probe-diagnostics>div{display:flex;justify-content:space-between;gap:8px;font-size:9px}.probe-diagnostics>div span{font-weight:800;color:#536cc4}.probe-diagnostics dl{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:8px 0}.probe-diagnostics dl>div{padding:6px;background:#fff;border-radius:7px}.probe-diagnostics dt{font-size:7px;color:#8a93a7}.probe-diagnostics dd{margin:2px 0 0;font-size:8px;overflow-wrap:anywhere}.probe-diagnostics p{font-size:8px;color:#778198}.result-stage{display:grid;gap:13px}.result-overview{display:grid;grid-template-columns:2fr repeat(3,1fr);gap:9px}.result-overview article{padding:12px;border:1px solid #e6eaf2;border-radius:10px;background:#fbfcff}.result-overview span,.result-overview b{display:block}.result-overview span{font-size:8px;color:#8a93a7}.result-overview b{font-size:15px;margin:4px 0;color:#34405c}.result-overview p{margin:0;font-size:8px;line-height:1.5;color:#7c869b}.returned-shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.returned-shots>article{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;padding:9px;border:1px solid #e6eaf2;border-radius:10px}.shot-thumb{position:relative}.shot-thumb img{width:112px;height:82px;object-fit:cover;border-radius:7px;background:#f1f3f7}.shot-thumb span{position:absolute;left:5px;top:5px;padding:3px 5px;border-radius:5px;background:rgba(28,38,60,.78);color:#fff;font-size:8px}.returned-shots b{font-size:10px}.returned-shots p{font-size:8px;line-height:1.5;margin:4px 0;color:#69758d}.returned-shots small{font-size:7px;color:#8d96a9}.returned-shots details{margin-top:6px;font-size:8px}.returned-shots summary{cursor:pointer;color:#4e70c7}.returned-shots details strong{display:block;margin-top:6px}.image-engine-panel{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #dfe7f6;border-radius:11px;background:#f8fbff}.image-engine-panel b,.image-engine-panel small{display:block}.image-engine-panel b{font-size:10px;color:#34405c}.image-engine-panel small{font-size:8px;color:#73809a;margin-top:2px}.image-engine-panel p{margin:5px 0 0;font-size:8px;color:#8290a8}.image-engine-actions{display:flex;gap:7px;flex-wrap:wrap}.shot-thumb em{position:absolute;right:5px;bottom:5px;padding:3px 5px;border-radius:5px;background:rgba(34,132,91,.86);color:#fff;font-size:7px;font-style:normal}.frame-actions{display:flex;align-items:center;gap:7px;margin-top:7px}.frame-actions span{font-size:7px;color:#7d879d;overflow-wrap:anywhere}.downstream-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}.waiting-flow{display:flex;align-items:center;justify-content:center;padding:18px 8px}.waiting-flow>div{text-align:center;min-width:120px;color:#919aaf}.waiting-flow>div.active,.waiting-flow>div.done{color:#4774dc}.waiting-flow>div.done{color:#28815c}.waiting-flow span{width:34px;height:34px;margin:0 auto 6px;border-radius:50%;display:grid;place-items:center;background:#edf0f5;font-size:10px;font-weight:800}.waiting-flow .active span{background:#e9f0ff;color:#3477ef}.waiting-flow .done span{background:#e6f7ee;color:#21825c}.waiting-flow b,.waiting-flow small{display:block}.waiting-flow b{font-size:9px}.waiting-flow small{font-size:7px;margin-top:3px}.waiting-flow>i{width:70px;height:1px;background:#dfe4ed}.manual-import{border-top:1px solid #edf0f5;padding-top:11px}.manual-import summary{cursor:pointer;font-size:9px;font-weight:700;color:#5b6881}.manual-import p{font-size:8px;color:#8790a5}.manual-import textarea{resize:vertical;margin-bottom:7px}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:1400px){.workspace-grid{grid-template-columns:1fr 1fr}.task-card{grid-column:1/-1}.issue-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.source-layout{grid-template-columns:1fr}.result-overview{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.director-hero{align-items:flex-start;flex-direction:column}.step-strip{grid-template-columns:1fr 1fr}.workspace-grid{grid-template-columns:1fr}.task-card{grid-column:auto}.issue-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.returned-shots{grid-template-columns:1fr}.waiting-flow{align-items:stretch;flex-direction:column;gap:8px}.waiting-flow>i{width:1px;height:16px;margin:auto}.result-overview{grid-template-columns:1fr}.page-thumbs{grid-template-columns:repeat(5,minmax(0,1fr))}}
 @media(max-width:560px){.step-strip{grid-template-columns:1fr}.path-row,.issue-filters,.settings-form,.task-actions{grid-template-columns:1fr}.issue-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.page-thumbs{grid-template-columns:repeat(4,minmax(0,1fr))}.returned-shots>article{grid-template-columns:90px minmax(0,1fr)}.shot-thumb img{width:90px}.bridge-pill{min-width:0;width:100%}.director-hero{padding:18px}.director-hero h2{font-size:23px}}

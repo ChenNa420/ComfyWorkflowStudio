@@ -113,6 +113,36 @@ class GPTDirectorBridgeTests(unittest.TestCase):
         app = FastAPI(); app.include_router(comic.comic_story_router()); paths = {route.path for route in app.routes}
         self.assertIn('/api/comic-story/analyze', paths); self.assertIn('/api/comic-story/gpt-director/tasks', paths)
 
+    def test_26_local_source_binding_survives_store_recreation(self):
+        pdf, token = self.pdf_with_pages(2)
+        source = GPTDirectorSource(
+            token=token, name='Comic', filename='comic.pdf', pageCount=2,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/page/1', thumbnailUrl='/thumb/1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.store.bind_local_source(task.id, token, pdf)
+        restarted = GPTDirectorStore(self.root / 'storage')
+        self.assertEqual(restarted.resolve_local_source(task.id, token), pdf.resolve())
+
+    def test_27_local_source_path_is_private(self):
+        pdf, token = self.pdf_with_pages(1)
+        source = GPTDirectorSource(
+            token=token, name='Comic', filename='comic.pdf', pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/page/1', thumbnailUrl='/thumb/1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.store.bind_local_source(task.id, token, pdf)
+        public_task = (self.root / 'storage' / task.id / 'task.json').read_text(encoding='utf-8')
+        self.assertNotIn(str(pdf.resolve()), public_task)
+        self.assertTrue((self.root / 'storage' / task.id / 'source.local.json').is_file())
+
+    def test_28_local_source_binding_rejects_token_mismatch(self):
+        pdf, _ = self.pdf_with_pages(1)
+        task = self.task([1])
+        with self.assertRaisesRegex(ValueError, 'token'):
+            self.store.bind_local_source(task.id, 'wrong-token', pdf)
     def pdf_with_pages(self, pages):
         pdf = self.root / 'comic.pdf'
         with fitz.open() as doc:
