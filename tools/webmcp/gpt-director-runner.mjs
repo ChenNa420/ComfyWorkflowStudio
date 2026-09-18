@@ -113,8 +113,13 @@ async function connectRelay() {
     { name: 'comfy-workflow-studio-gpt-director-auto', version: '1.0.0' },
     { capabilities: {}, versionNegotiation: { mode: 'auto' } },
   )
-  await withTimeout(client.connect(transport), 15000, 'WebMCP relay connect')
-  return { client, relayLog }
+  try {
+    await withTimeout(client.connect(transport), 15000, 'WebMCP relay connect')
+    return { client, relayLog }
+  } catch (error) {
+    await client.close().catch(() => undefined)
+    throw error
+  }
 }
 
 export async function waitForTools(client, timeoutMs) {
@@ -186,6 +191,9 @@ export async function waitForTools(client, timeoutMs) {
         }
       }
     } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'DIRECTOR_WEBMCP_TIMEOUT') {
+        throw error
+      }
       lastDiagnostic = error instanceof Error ? error.message : String(error)
     }
 
