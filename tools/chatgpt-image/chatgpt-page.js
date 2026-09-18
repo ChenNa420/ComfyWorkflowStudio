@@ -184,6 +184,34 @@ async function waitForNewImage(page, beforeKeys, timeoutMs) {
   throw new ImageWorkerError("Timed out waiting for a newly generated ChatGPT image", "IMAGE_GENERATION_TIMEOUT");
 }
 
+async function uploadFiles(page, filePaths) {
+  if (!Array.isArray(filePaths) || !filePaths.length) {
+    throw new ImageWorkerError("At least one source image is required", "SOURCE_IMAGES_REQUIRED");
+  }
+
+  let input = page.locator("input[type='file']").first();
+  if (!(await input.count())) {
+    const addButton = page.locator([
+      "[data-testid='composer-plus-btn']",
+      "button[aria-label*='Attach']",
+      "button[aria-label*='上传']",
+      "button[aria-label*='添加']",
+    ].join(", ")).first();
+    if (await addButton.count() && await addButton.isVisible().catch(() => false)) {
+      await addButton.click().catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    input = page.locator("input[type='file']").first();
+  }
+
+  if (!(await input.count())) {
+    throw new ImageWorkerError("ChatGPT file upload input was not found", "CHATGPT_UPLOAD_INPUT_MISSING");
+  }
+
+  await input.setInputFiles(filePaths);
+  await page.waitForTimeout(Math.min(15000, 2200 + filePaths.length * 650));
+}
+
 export class ChatGPTPage {
   constructor(page, config) {
     this.page = page;
@@ -196,6 +224,26 @@ export class ChatGPTPage {
 
   async waitForLogin(timeoutMs) {
     return waitUntilAuthenticated(this.page, timeoutMs);
+  }
+
+  async prepareDraft(prompt, filePaths) {
+    await assertAuthenticated(this.page, 20000);
+    await uploadFiles(this.page, filePaths);
+    const box = await findPromptBox(this.page, 20000);
+    try { await box.fill(prompt); }
+    catch {
+      await box.click();
+      await this.page.keyboard.insertText(prompt);
+    }
+    await this.page.waitForTimeout(500);
+    return {
+      ok: true,
+      prepared: true,
+      sent: false,
+      attachmentCount: filePaths.length,
+      promptLength: String(prompt || "").length,
+      url: this.page.url(),
+    };
   }
 
   async generate(prompt) {
