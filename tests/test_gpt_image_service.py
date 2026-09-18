@@ -13,7 +13,14 @@ from backend.gpt_director import (
     GPTDirectorSource,
     GPTDirectorStore,
 )
-from backend.gpt_image_service import GPTImageError, GPTImageService, ImmediateExecutor
+from backend.gpt_image_service import (
+    DEFAULT_CHATGPT_IMAGE_CDP_URL,
+    DEFAULT_CHATGPT_IMAGE_GPT_URL,
+    GPTImageError,
+    GPTImageService,
+    ImmediateExecutor,
+    NodeImageWorker,
+)
 
 
 class FakeWorker:
@@ -88,6 +95,13 @@ class GPTImageServiceTests(unittest.TestCase):
 
     def test_status_is_safe(self):
         self.assertTrue(self.service.status()['readyForCheck'])
+
+    def test_node_worker_defaults_to_local_cdp_and_tongyu_gpt(self):
+        worker = NodeImageWorker(self.root)
+        env = worker._env()
+        self.assertEqual(env['CWS_CHATGPT_IMAGE_CDP_URL'], DEFAULT_CHATGPT_IMAGE_CDP_URL)
+        self.assertEqual(env['CWS_CHATGPT_IMAGE_URL'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
+        self.assertTrue(env['CWS_CHATGPT_IMAGE_URL'].startswith('https://chatgpt.com/g/'))
 
     def test_generates_and_binds_frame(self):
         job = self.service.create_job(self.task_id, 'S01')
