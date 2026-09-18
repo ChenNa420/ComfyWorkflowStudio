@@ -50,9 +50,10 @@ In CDP mode the worker does not close the operator-owned Chrome window.
 
 ## Fallback: Playwright-launched dedicated profile
 
-You can still use:
+You can still use the Playwright-managed profile by explicitly disabling CDP for that process:
 
 ```powershell
+$env:CWS_CHATGPT_IMAGE_CDP_URL="off"
 node tools/chatgpt-image/worker.js login
 ```
 
