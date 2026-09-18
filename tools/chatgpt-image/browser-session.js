@@ -97,7 +97,18 @@ export class BrowserSession {
   async getPage(targetUrl) {
     const context = await this.getContext();
     const pages = context.pages();
-    const page = pages.find(isChatGPTPage) || pages[0] || (await context.newPage());
+    const target = new URL(targetUrl);
+    const targetPath = target.pathname.replace(/\/$/, "");
+    const exact = pages.find((candidate) => {
+      try {
+        const current = new URL(candidate.url());
+        return current.hostname.toLowerCase() === target.hostname.toLowerCase()
+          && current.pathname.replace(/\/$/, "") === targetPath;
+      } catch {
+        return false;
+      }
+    });
+    const page = exact || [...pages].reverse().find(isChatGPTPage) || pages[0] || (await context.newPage());
     if (page.url() !== targetUrl) {
       try {
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
