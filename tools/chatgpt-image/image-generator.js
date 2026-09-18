@@ -50,7 +50,7 @@ export class ImageGenerator {
   login() {
     return this.serialize(async () => {
       const page = await this.session.getPage(this.config.chatgptUrl);
-      return new ChatGPTPage(page, this.config).assertReady(this.config.loginTimeoutMs);
+      return new ChatGPTPage(page, this.config).waitForLogin(this.config.loginTimeoutMs);
     });
   }
 
