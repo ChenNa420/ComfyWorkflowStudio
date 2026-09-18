@@ -21,14 +21,14 @@ export const SELECTORS = Object.freeze({
     "button[aria-label*='停止']",
   ].join(", "),
   loggedOut: [
-    "button:has-text('登录')",
-    "a:has-text('登录')",
-    "button:has-text('Log in')",
-    "a:has-text('Log in')",
-    "button:has-text('免费注册')",
-    "a:has-text('免费注册')",
-    "button:has-text('Sign up')",
-    "a:has-text('Sign up')",
+    "button:text-is('登录')",
+    "a:text-is('登录')",
+    "button:text-is('Log in')",
+    "a:text-is('Log in')",
+    "button:text-is('免费注册')",
+    "a:text-is('免费注册')",
+    "button:text-is('Sign up')",
+    "a:text-is('Sign up')",
   ].join(", "),
 });
 
