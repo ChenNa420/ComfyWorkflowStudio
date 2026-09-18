@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -120,6 +122,21 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(env['CWS_CHATGPT_IMAGE_CDP_URL'], DEFAULT_CHATGPT_IMAGE_CDP_URL)
         self.assertEqual(env['CWS_CHATGPT_IMAGE_URL'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         self.assertTrue(env['CWS_CHATGPT_IMAGE_URL'].startswith('https://chatgpt.com/g/'))
+
+    def test_node_worker_forces_utf8_for_unicode_prompts(self):
+        worker = NodeImageWorker(self.root)
+        payload = {'prompt': '童语工坊：高度原创，保留画面氛围'}
+        fake = SimpleNamespace(
+            stdout='{"ok": true, "prepared": true}\n',
+            returncode=0,
+        )
+        with patch.object(worker, '_node', return_value='node'), patch('backend.gpt_image_service.subprocess.run', return_value=fake) as run:
+            result = worker._run('prepare-story', payload, timeout=5)
+        self.assertTrue(result['ok'])
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs['encoding'], 'utf-8')
+        self.assertEqual(kwargs['errors'], 'strict')
+        self.assertIn('童语工坊', kwargs['input'])
 
     def test_prepares_story_draft_with_selected_source_pages_without_sending(self):
         target = 'https://chatgpt.com/g/test-manual-director'
