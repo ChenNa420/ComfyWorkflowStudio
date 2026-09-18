@@ -58,7 +58,8 @@ const activeTask = ref<DirectorTask|null>(null)
 const gptResult = ref<DirectorResult|null>(null)
 const manualJson = ref('')
 const promptCopied = ref(false)
-const gptUrl = ref('')
+const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
+const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
 const webMcpAvailable = ref(false)
 const webMcpRegistered = ref(false)
 const webMcpError = ref('')
@@ -87,6 +88,7 @@ type ImageFrameState = {
 type ImageJobState = { jobId:string; status:string; errorCode?:string|null; errorMessage?:string|null }
 const imageEngine = ref({
   node:false, worker:false, dependencies:false, profileExists:false, readyForCheck:false,
+  browserMode:'cdp', cdpUrl:'http://127.0.0.1:9222', gptUrl:DEFAULT_GPT_DIRECTOR_URL,
   chatgptReady:false, checking:false, message:'尚未检测',
 })
 const frameStateByShot = ref<Record<string,ImageFrameState>>({})
@@ -132,7 +134,8 @@ const estimatedShots = computed(()=>{
 })
 const directorPrompt = computed(()=>{
   if(!activeTask.value)return ''
-  return `你正在为 ComfyWorkflowStudio 执行 GPT Director Task ${activeTask.value.id}。\n\n请先调用 WebMCP 工具 get_comic_story_task，taskId=${activeTask.value.id}，读取漫画来源、选中页和改编设置。\n\n目标：理解选中漫画页面中的故事与画面关系，然后重新创作成适合儿童英语动画的“自己的故事”。不要机械翻译或逐格复刻。可以参考原画面的氛围和构图，但新故事、角色与对白必须遵循任务中的改编设置。\n\n请自动决定合理镜头数量，不固定 6 镜头。每个镜头生成 title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。sourcePages 只能引用任务选中的页。\n\n如果当前环境无法直接看到 page imageUrl，请先让我上传任务中的选中页图片，不要猜画面内容。\n\n完成后调用 import_gpt_story 写回完整结果，最后调用 complete_gpt_story_task。不要调用 ComfyUI，不要生成视频。`
+  const pages=activeTask.value.source.selectedPages.join(', ')
+  return `你正在为 ComfyWorkflowStudio 执行 GPT Director Task ${activeTask.value.id}。\n\n第一步调用 WebMCP 工具 get_comic_story_task，taskId=${activeTask.value.id}，读取漫画来源、选中页和改编设置。\n\n然后必须逐页调用 get_comic_story_page 读取全部 selectedPages（当前为：${pages}）。只有全部页面都成功获得真实 ImageContent 后，才能开始理解和创作；不要根据文件名、URL 或 metadata 猜画面。\n\n目标：综合理解这些漫画页面中的角色、动作、场景、页间故事关系、视觉氛围和构图关系，然后重新创作成适合儿童英语动画的“自己的故事”。不要机械翻译或逐格复刻。可以参考原画面的氛围和构图，但新故事、角色与对白必须遵循任务中的改编设置。\n\n请自动决定合理镜头数量，不固定 6 镜头。每个镜头生成 title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。sourcePages 只能引用任务选中的页。\n\n完成后调用 import_gpt_story 写回完整结果，最后调用 complete_gpt_story_task。不要调用 ComfyUI，不要生成视频。`
 })
 
 function formatBytes(value:number){
@@ -161,7 +164,7 @@ function sleep(ms:number){return new Promise(resolve=>window.setTimeout(resolve,
 async function loadImageEngineStatus(){
   try{
     const value=await getJson('/api/gpt-image/status')
-    imageEngine.value={...imageEngine.value,...value,message:value.readyForCheck?'图片引擎已安装，点击“检测登录”验证 ChatGPT 会话。':'需要先安装 tools/chatgpt-image 依赖。'}
+    imageEngine.value={...imageEngine.value,...value,message:value.readyForCheck?'图片引擎已安装。打开专用 Chrome 后点击“检测登录”。':'需要先安装 tools/chatgpt-image 依赖。'}
   }catch(value){
     imageEngine.value={...imageEngine.value,message:value instanceof Error?value.message:'图片引擎状态读取失败'}
   }
@@ -180,7 +183,7 @@ async function checkImageEngine(){
 async function startImageLogin(){
   try{
     await postJson('/api/gpt-image/login',{})
-    imageEngine.value={...imageEngine.value,message:'已启动专用浏览器。请在新窗口完成 ChatGPT 登录，然后点击“检测登录”。'}
+    imageEngine.value={...imageEngine.value,message:'已启动专用 Chrome，并打开“童语工坊 · AI动画编剧导演”。请保持窗口开启，登录后点击“检测登录”。'}
   }catch(value){
     error.value=value instanceof Error?value.message:'无法启动 ChatGPT 登录浏览器'
   }
@@ -323,7 +326,7 @@ function selectCurrentPage(){
 function saveGptUrl(){
   const value=gptUrl.value.trim()
   try{localStorage.setItem('cws-gpt-director-url',value)}catch{}
-  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已清空 GPT 页面地址，将打开 ChatGPT 首页。'
+  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已恢复默认“童语工坊 · AI动画编剧导演”地址。'
 }
 
 function pageRef(page:number){return `P${String(page).padStart(3,'0')}`}
@@ -452,7 +455,7 @@ async function openGpt(){
   if(!activeTask.value)await createTask()
   if(!activeTask.value)return
   await copyTaskPrompt()
-  let url=gptUrl.value.trim()||'https://chatgpt.com/'
+  let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
   if(!/^https?:\/\//i.test(url))url=`https://${url}`
   window.open(url,'_blank','noopener,noreferrer')
 }
@@ -465,7 +468,7 @@ function persistBridgeState(){
 
 async function restoreBridgeState(){
   try{
-    gptUrl.value=localStorage.getItem('cws-gpt-director-url')||''
+    gptUrl.value=localStorage.getItem('cws-gpt-director-url')||DEFAULT_GPT_DIRECTOR_URL
     const source=sessionStorage.getItem('cws-gpt-director-source')
     if(source){const parsed=JSON.parse(source);selectedIssue.value=parsed.issue||null;selectedPages.value=Array.isArray(parsed.selectedPages)?parsed.selectedPages:[];currentPage.value=Number(parsed.currentPage)||1}
     sessionStorage.removeItem('cws-gpt-director-task');sessionStorage.removeItem('cws-gpt-director-result')
@@ -560,6 +563,15 @@ async function registerWebMcp(){
         },
       },{signal:lifecycle.signal})),
       Promise.resolve(context.registerTool({
+        name:'get_comic_story_page',
+        description:'读取 GPT Director Task 中一张已选择漫画页的真实图像。返回 WebMCP ImageContent；只能读取 selectedPages 中的页。',
+        inputSchema:{type:'object',properties:{taskId:{type:'string'},page:{type:'integer',minimum:1}},required:['taskId','page'],additionalProperties:false},
+        annotations:{readOnlyHint:true},
+        async execute(input:any){
+          return trackTool('get_comic_story_page',()=>sourcePageImageResult(String(input?.taskId||''),Number(input?.page),false))
+        },
+      },{signal:lifecycle.signal})),
+      Promise.resolve(context.registerTool({
         name:'import_gpt_story',
         description:'将 GPT 编剧导演生成的故事、角色、场景、动态镜头和关键帧/视频提示词写回 ComfyWorkflowStudio。',
         inputSchema:{type:'object',properties:{taskId:{type:'string'},result:{type:'object',additionalProperties:true}},required:['taskId','result'],additionalProperties:false},
@@ -603,7 +615,7 @@ async function registerWebMcp(){
       },{signal:lifecycle.signal})),
     ])
     webMcpRegistered.value=true
-    registeredToolCount.value=5
+    registeredToolCount.value=6
     webMcpError.value=''
   }catch(value){
     webMcpRegistered.value=false
@@ -645,7 +657,7 @@ onUnmounted(()=>lifecycle.abort())
       </div>
       <div :class="['bridge-pill',{ok:webMcpRegistered}]">
         <Wifi v-if="webMcpRegistered" :size="16"/><WifiOff v-else :size="16"/>
-        <div><b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b><small>{{webMcpRegistered?'5 个工具已注册（含开发期 Probe）':'可使用复制/导入备用流程'}}</small></div>
+        <div><b>WebMCP {{webMcpRegistered?'已就绪':'未连接'}}</b><small>{{webMcpRegistered?'6 个工具已注册（含漫画页 ImageContent）':'可使用复制/导入备用流程'}}</small></div>
       </div>
     </section>
 
@@ -753,11 +765,11 @@ onUnmounted(()=>lifecycle.abort())
           <div class="image-engine-panel">
             <div>
               <b>ChatGPT 图片引擎</b>
-              <small>{{imageEngine.chatgptReady?'Ready':imageEngine.readyForCheck?'待检测登录':'未安装'}} · 专用浏览器 Profile · 串行生成</small>
+              <small>{{imageEngine.chatgptReady?'Ready':imageEngine.readyForCheck?'待检测登录':'未安装'}} · Chrome CDP · 固定童语工坊 GPT · 串行生成</small>
               <p>{{imageEngine.message}}</p>
             </div>
             <div class="image-engine-actions">
-              <button class="secondary small" :disabled="!imageEngine.readyForCheck" @click="startImageLogin">首次登录</button>
+              <button class="secondary small" :disabled="!imageEngine.readyForCheck" @click="startImageLogin">打开专用 Chrome</button>
               <button class="secondary small" :disabled="!imageEngine.readyForCheck||imageEngine.checking" @click="checkImageEngine"><LoaderCircle v-if="imageEngine.checking" class="spin" :size="13"/><RefreshCw v-else :size="13"/>检测登录</button>
             </div>
           </div>
