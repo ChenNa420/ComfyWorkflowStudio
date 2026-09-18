@@ -215,6 +215,15 @@ async function loadFrameStates(taskId:string){
 
 function frameState(shot:DirectorShot){return frameStateByShot.value[String(shot.shotId)]}
 function frameJob(shot:DirectorShot){return frameJobByShot.value[String(shot.shotId)]}
+function frameJobLabel(shot:DirectorShot){
+  const job=frameJob(shot)
+  if(!job)return ''
+  if(job.status==='QUEUED')return '等待发送到 GPT'
+  if(job.status==='RUNNING')return 'GPT 正在生成图片'
+  if(job.status==='COMPLETED')return 'GPT 图片已生成'
+  if(job.status==='FAILED')return job.errorMessage?'生成失败：'+job.errorMessage:'生成失败'
+  return job.status
+}
 function framePreviewUrl(shot:DirectorShot){
   const frame=frameState(shot)
   return frame?.url?`${frame.url}?v=${(frame.sha256||frame.generatedAt||'1').slice(0,12)}`:`/api/comic-story/page/${selectedIssue.value?.token}/${shot.sourcePages[0]}`
@@ -250,7 +259,7 @@ async function generateShotFrame(shot:DirectorShot){
   try{
     const job=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(activeTask.value.id)}/shots/${encodeURIComponent(shotId)}/generate`,{replace})
     frameJobByShot.value={...frameJobByShot.value,[shotId]:job}
-    notice.value=`Shot ${shotId} 已进入 ChatGPT 图片生成队列。`
+    notice.value=`Shot ${shotId} 的 imagePrompt 已直接发送到 GPT 图片生成队列。`
     await pollFrameJob(shotId,job.jobId)
   }catch(value){
     error.value=value instanceof Error?value.message:'关键帧生成失败'
@@ -888,9 +897,9 @@ onUnmounted(()=>{storyWatchNonce++;collectingGpt.value=false;lifecycle.abort()})
                   <button class="primary small" :disabled="['QUEUED','RUNNING'].includes(frameJob(shot)?.status||'')" @click="generateShotFrame(shot)">
                     <LoaderCircle v-if="['QUEUED','RUNNING'].includes(frameJob(shot)?.status||'')" class="spin" :size="13"/>
                     <Sparkles v-else :size="13"/>
-                    {{frameState(shot)?.status==='IMPORTED'?'重新生成':'生成关键帧'}}
+                    {{frameJob(shot)?.status==='QUEUED'?'正在发送':frameJob(shot)?.status==='RUNNING'?'GPT 生成中':frameState(shot)?.status==='IMPORTED'?'重新生成':'生成关键帧'}}
                   </button>
-                  <span v-if="frameJob(shot)?.status">{{frameJob(shot)?.status}}</span>
+                  <span v-if="frameJob(shot)?.status">{{frameJobLabel(shot)}}</span>
                   <span v-else-if="frameState(shot)?.status==='IMPORTED'">{{frameState(shot)?.width}}×{{frameState(shot)?.height}} · {{frameState(shot)?.captureMethod}}</span>
                   <span v-else>Not Generated</span>
                 </div>
