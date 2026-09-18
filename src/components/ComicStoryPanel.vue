@@ -359,21 +359,41 @@ async function loadDirectorAutoStatus(){
 }
 
 async function pollDirectorAutoJob(jobId:string){
+  let resultHydrated=false
   for(let attempt=0;attempt<450;attempt++){
     await sleep(2000)
     const value=await getJson(`/api/gpt-director-auto/jobs/${encodeURIComponent(jobId)}`)
     directorAutoJob.value=value
+
+    // import_gpt_story can persist the Result a moment before the runner marks
+    // the auto job COMPLETED. Surface it immediately instead of keeping Step 3
+    // on screen while complete_gpt_story_task / process cleanup finishes.
+    if(!resultHydrated&&value.taskId&&attempt%2===0){
+      try{
+        const payload=await loadDirectorTask(value.taskId)
+        if(payload?.result){
+          resultHydrated=true
+          notice.value=`GPT 结果已返回工作台，正在完成任务收尾… · ${payload.result.shots?.length||0} Shots。`
+        }
+      }catch{}
+    }
+
     if(value.status==='COMPLETED'){
       localStorage.removeItem('cws-gpt-director-auto-job-id')
       if(value.taskId)await loadDirectorTask(value.taskId)
-      notice.value=`童语工坊 GPT 已完成自动创作：${value.result?.title||'故事已返回'} · ${value.result?.shotCount||gptResult.value?.shots.length||0} Shots。`
+      notice.value=`童语工坊 GPT 已完成自动创作：${value.result?.title||gptResult.value?.creativeStory?.title||'故事已返回'} · ${value.result?.shotCount||gptResult.value?.shots.length||0} Shots。`
       return
     }
     if(value.status==='FAILED'){
       localStorage.removeItem('cws-gpt-director-auto-job-id')
+      if(resultHydrated){
+        error.value=`故事结果已经返回，但自动任务收尾失败：${value.errorMessage||value.errorCode||'未知错误'}`
+        return
+      }
       throw new Error(value.errorMessage||value.errorCode||'GPT 自动创作失败')
     }
   }
+  if(resultHydrated)return
   throw new Error('GPT 自动创作等待超时，请稍后刷新页面查看任务状态。')
 }
 
