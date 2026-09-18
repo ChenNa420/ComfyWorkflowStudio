@@ -7,6 +7,15 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5174,
     strictPort: true,
+    watch: {
+      ignored: [
+        '**/storage/**',
+        '**/database/**',
+        '**/workflows/**/runtime/**',
+        '**/workflows/**/outputs/**',
+        '**/.venv/**'
+      ]
+    },
     proxy: {
       '/api': 'http://127.0.0.1:8100'
     }
