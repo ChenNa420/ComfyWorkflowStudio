@@ -123,6 +123,9 @@ class NodeImageWorker:
     def prepare_story(self, payload: dict) -> dict:
         return self._run('prepare-story', payload, timeout=120)
 
+    def collect_story(self, payload: dict) -> dict:
+        return self._run('collect-story', payload, timeout=210)
+
     def generate(self, payload: dict) -> dict:
         return self._run('generate', payload, timeout=660)
 
@@ -234,6 +237,13 @@ class GPTImageService:
             ],
         }
         result = self.worker.prepare_story(payload)
+        prep_path = self._story_prep_path(task_id)
+        self._atomic_write(prep_path, {
+            'taskId': task_id,
+            'gptUrl': str(result.get('url') or target_url),
+            'assistantBaseline': result.get('assistantBaseline') or {},
+            'preparedAt': _now(),
+        })
         return {
             'ok': True,
             'prepared': bool(result.get('prepared')),
@@ -244,6 +254,75 @@ class GPTImageService:
             'promptLength': int(result.get('promptLength') or len(text)),
             'gptUrl': str(result.get('url') or target_url),
             'browserMode': str(result.get('browserMode') or 'cdp'),
+            'watchingForResult': True,
+        }
+
+    def _story_prep_path(self, task_id: str) -> Path:
+        self.director.load_task(task_id)
+        path = (self.frames_root / task_id / 'story-prep.json').resolve()
+        path.relative_to(self.frames_root)
+        return path
+
+    def collect_story(self, task_id: str, gpt_url: str | None = None) -> dict:
+        try:
+            task = self.director.load_task(task_id)
+        except ValueError as exc:
+            raise GPTImageError('INVALID_TASK_ID', 'Invalid GPT Director task ID') from exc
+        except FileNotFoundError as exc:
+            raise GPTImageError('TASK_NOT_FOUND', 'GPT Director task not found') from exc
+
+        if task.status == 'COMPLETED':
+            result = self.director.load_result(task_id)
+            return {
+                'ok': True,
+                'pending': False,
+                'repaired': False,
+                'taskId': task_id,
+                'status': task.status,
+                'title': result.creativeStory.title if result else '',
+                'shotCount': len(result.shots) if result else 0,
+            }
+
+        prep_path = self._story_prep_path(task_id)
+        if not prep_path.is_file():
+            raise GPTImageError('STORY_PREP_REQUIRED', 'Prepare the GPT story draft before collecting the result')
+        try:
+            prep = json.loads(prep_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GPTImageError('STORY_PREP_INVALID', 'Stored GPT story preparation state is invalid') from exc
+
+        target_url = str(gpt_url or prep.get('gptUrl') or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
+        collected = self.worker.collect_story({
+            'taskId': task_id,
+            'gptUrl': target_url,
+            'assistantBaseline': prep.get('assistantBaseline') or {},
+        })
+        if bool(collected.get('pending')):
+            return {
+                'ok': True,
+                'pending': True,
+                'repaired': False,
+                'taskId': task_id,
+                'status': task.status,
+            }
+
+        raw_result = collected.get('result')
+        try:
+            result = GPTDirectorResult.model_validate(raw_result)
+            self.director.import_result(task_id, result)
+            completed = self.director.complete(task_id)
+        except Exception as exc:
+            raise GPTImageError('DIRECTOR_INVALID_PRODUCTION_JSON', str(exc)) from exc
+
+        prep_path.unlink(missing_ok=True)
+        return {
+            'ok': True,
+            'pending': False,
+            'repaired': bool(collected.get('repaired')),
+            'taskId': task_id,
+            'status': completed.status,
+            'title': result.creativeStory.title,
+            'shotCount': len(result.shots),
         }
 
     def _job_path(self, job_id: str) -> Path:
