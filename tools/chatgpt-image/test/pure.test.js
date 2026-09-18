@@ -91,9 +91,17 @@ test("story parser locally repairs unescaped dialogue quotes without changing co
   const malformed = '{"sourceUnderstanding":{},"creativeStory":{"title":"Demo"},"characterDefinitions":[],"sceneDefinitions":[],"shots":[{"shotId":"S01","english":"Bobo, "wait!"","imagePrompt":"frame","videoPrompt":"motion","sourcePages":[1]}]}';
   const parsed = parseStoryJsonDetailed(malformed);
   assert.equal(parsed.repaired, true);
-  assert.equal(parsed.repairMethod, "local_jsonrepair");
+  assert.equal(parsed.repairMethod, "local_quote_escape");
   assert.equal(parsed.value.shots[0].english, 'Bobo, "wait!"');
   assert.equal(parsed.value.shots[0].imagePrompt, "frame");
+  assert.equal(validateStoryResult(parsed.value), parsed.value);
+});
+
+test("story parser keeps punctuation after repaired dialogue quotes", () => {
+  const malformed = '{"sourceUnderstanding":{},"creativeStory":{"title":"Demo"},"characterDefinitions":[],"sceneDefinitions":[],"shots":[{"shotId":"S01","english":"He said "wait!", then ran.","imagePrompt":"frame","videoPrompt":"motion","sourcePages":[1]}]}';
+  const parsed = parseStoryJsonDetailed(malformed);
+  assert.equal(parsed.repaired, true);
+  assert.equal(parsed.value.shots[0].english, 'He said "wait!", then ran.');
   assert.equal(validateStoryResult(parsed.value), parsed.value);
 });
 
