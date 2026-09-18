@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 import fitz
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from backend.db import ROOT
@@ -17,6 +17,10 @@ from backend.ai.providers import get_comic_ai_provider
 from backend.ai.service import ComicAiError, ComicAiService
 from backend.ai.models import Episode
 from backend.ai.production_handoff import ProductionPlan, build_production_plan
+from backend.gpt_director import (
+    GPTDirectorConflict, GPTDirectorPage, GPTDirectorResultImport, GPTDirectorSource,
+    GPTDirectorStore, GPTDirectorTaskCreate, build_episode_candidate,
+)
 
 SUPPORTED_FILES = {'.pdf', '.cbz', '.zip', '.png', '.jpg', '.jpeg', '.webp'}
 IMAGE_FILES = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -143,6 +147,22 @@ def _page_count(path: Path) -> int | None:
     return None
 
 
+def _gpt_director_source(path: Path, token: str, selected_pages: list[int], base_url: str) -> GPTDirectorSource:
+    total = _page_count(path)
+    if not total:
+        raise ValueError('comic_source_has_no_pages')
+    if any(page > total for page in selected_pages):
+        raise ValueError('selected_page_out_of_range')
+    pages = sorted(selected_pages)
+    base = base_url.rstrip('/')
+    return GPTDirectorSource(
+        token=token, name=path.stem, filename=path.name, pageCount=total, selectedPages=pages,
+        pages=[GPTDirectorPage(ref=f'P{page:03d}', page=page,
+                imageUrl=f'{base}/api/comic-story/page/{token}/{page}',
+                thumbnailUrl=f'{base}/api/comic-story/page/{token}/{page}?thumbnail=true') for page in pages],
+    )
+
+
 def _issue_payload(path: Path) -> dict:
     token = _register_file(path)
     return {
@@ -248,6 +268,7 @@ def _ai_error(exc: ComicAiError):
 
 def comic_story_router() -> APIRouter:
     router = APIRouter(prefix='/api/comic-story', tags=['comic-story'])
+    director_store = GPTDirectorStore(ROOT / 'storage' / 'gpt-director')
 
     @router.get('/suggested-roots')
     def suggested_roots():
@@ -266,6 +287,58 @@ def comic_story_router() -> APIRouter:
     def ai_probe():
         try: return _service().probe()
         except ComicAiError as exc: _ai_error(exc)
+
+    @router.post('/gpt-director/tasks')
+    def create_gpt_director_task(payload: GPTDirectorTaskCreate, request: Request):
+        path = _assert_registered(payload.token)
+        try:
+            source = _gpt_director_source(path, payload.token, payload.selectedPages, str(request.base_url))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return director_store.create(source, payload.settings).model_dump(mode='json', exclude={'resultHash'})
+
+    def director_payload(task_id: str):
+        try:
+            task = director_store.load_task(task_id)
+            result = director_store.load_result(task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail='invalid_gpt_director_task_id') from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail='gpt_director_task_not_found') from exc
+        value = task.model_dump(mode='json', exclude={'resultHash'})
+        value['result'] = result.model_dump(mode='json') if result else None
+        value['episodeCandidate'] = build_episode_candidate(task, result) if result else None
+        return value
+
+    @router.get('/gpt-director/tasks/{task_id}')
+    def get_gpt_director_task(task_id: str):
+        return director_payload(task_id)
+
+    @router.post('/gpt-director/tasks/{task_id}/result')
+    def import_gpt_director_result(task_id: str, payload: GPTDirectorResultImport):
+        try:
+            task, already = director_store.import_result(task_id, payload.result)
+        except GPTDirectorConflict as exc:
+            raise HTTPException(status_code=409, detail='gpt_director_result_conflict') from exc
+        except ValueError as exc:
+            detail = 'invalid_gpt_director_task_id' if 'taskId' in str(exc) else str(exc)
+            raise HTTPException(status_code=422, detail=detail) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail='gpt_director_task_not_found') from exc
+        return {'taskId': task.id, 'accepted': True, 'alreadyAccepted': already,
+                'shotCount': len(payload.result.shots), 'title': payload.result.creativeStory.title,
+                'status': task.status}
+
+    @router.post('/gpt-director/tasks/{task_id}/complete')
+    def complete_gpt_director_task(task_id: str):
+        try:
+            task = director_store.complete(task_id)
+        except ValueError as exc:
+            detail = 'invalid_gpt_director_task_id' if 'taskId' in str(exc) else 'gpt_director_result_required'
+            raise HTTPException(status_code=409 if 'result' in str(exc) else 400, detail=detail) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail='gpt_director_task_not_found') from exc
+        return {'taskId': task.id, 'status': task.status}
 
     @router.post('/scan')
     def scan_library(payload: ComicScanRequest):
