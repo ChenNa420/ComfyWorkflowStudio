@@ -238,6 +238,16 @@ export function completeJsonResponse(text) {
   }
 }
 
+export function isNewAssistantResponse(count, text, baseline) {
+  return Boolean(
+    text
+    && (
+      count > baseline.count
+      || text !== baseline.lastText
+    )
+  )
+}
+
 async function waitForAssistantResponse(page, baseline, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   let stableText = ''
@@ -250,13 +260,7 @@ async function waitForAssistantResponse(page, baseline, timeoutMs) {
 
     // Some ChatGPT layouts recycle the same assistant DOM node. Treat a changed
     // final assistant text as a new response even when the node count is unchanged.
-    const isNewResponse = Boolean(
-      text
-      && (
-        count > baseline.count
-        || text !== baseline.lastText
-      )
-    )
+    const isNewResponse = isNewAssistantResponse(count, text, baseline)
 
     if (isNewResponse) {
       const generating = await isGenerating(page)
