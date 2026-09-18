@@ -11,6 +11,10 @@ function isChatGPTPage(page) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class BrowserSession {
   constructor(config) {
     this.config = config;
@@ -23,25 +27,44 @@ export class BrowserSession {
     return this.config.cdpUrl ? "cdp" : "dedicated_profile";
   }
 
-  async getContext() {
-    if (this.context) return this.context;
-
-    if (this.config.cdpUrl) {
+  async connectCdp() {
+    const delays = [0, 250, 500, 1000, 1500];
+    let lastError = null;
+    for (const delay of delays) {
+      if (delay) await sleep(delay);
       try {
-        this.browser = await chromium.connectOverCDP(this.config.cdpUrl);
+        this.browser = await chromium.connectOverCDP(this.config.cdpUrl, { timeout: 10000 });
         this.context = this.browser.contexts()[0];
         if (!this.context) {
+          this.browser = null;
           throw new ImageWorkerError("Chrome CDP endpoint has no browser context", "CDP_CONTEXT_MISSING");
         }
         return this.context;
       } catch (error) {
-        if (error instanceof ImageWorkerError) throw error;
-        throw new ImageWorkerError(
-          "Could not connect to the dedicated Chrome CDP endpoint. Start tools/chatgpt-image/start-cdp-chrome.cmd first.",
-          "CDP_CONNECT_FAILED",
-          { cause: String(error?.message || error || "") },
-        );
+        if (error instanceof ImageWorkerError && error.code === "CDP_CONTEXT_MISSING") {
+          lastError = error;
+        } else {
+          lastError = error;
+        }
+        this.browser = null;
+        this.context = null;
       }
+    }
+    if (lastError instanceof ImageWorkerError && lastError.code === "CDP_CONTEXT_MISSING") {
+      throw lastError;
+    }
+    throw new ImageWorkerError(
+      "Could not connect to the dedicated Chrome CDP endpoint after retries. Keep the CDP Chrome window open and confirm http://127.0.0.1:9222/json/version is reachable.",
+      "CDP_CONNECT_FAILED",
+      { cause: String(lastError?.message || lastError || "") },
+    );
+  }
+
+  async getContext() {
+    if (this.context) return this.context;
+
+    if (this.config.cdpUrl) {
+      return this.connectCdp();
     }
 
     await fs.mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
