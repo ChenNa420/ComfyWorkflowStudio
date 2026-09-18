@@ -222,6 +222,22 @@ async function isGenerating(page) {
   return false
 }
 
+export function completeJsonResponse(text) {
+  try {
+    const value = parseJsonObject(text)
+    return Boolean(
+      value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && value.creativeStory
+      && Array.isArray(value.shots)
+      && value.shots.length > 0
+    )
+  } catch {
+    return false
+  }
+}
+
 async function sendPrompt(page, prompt, timeoutMs) {
   const beforeCount = await page.locator("[data-message-author-role='assistant']").count().catch(() => 0)
   const box = page.locator(SELECTORS.prompt).first()
@@ -252,9 +268,14 @@ async function sendPrompt(page, prompt, timeoutMs) {
         stableText = text
         stableSince = text ? Date.now() : 0
       }
-      if (text && !generating && stableSince && Date.now() - stableSince >= 3000) return text
+
+      const stableFor = stableSince ? Date.now() - stableSince : 0
+      // ChatGPT can leave a stop/generating control visible briefly after the final
+      // JSON is already complete. A parseable stable production payload is enough.
+      if (text && completeJsonResponse(text) && stableFor >= 1800) return text
+      if (text && !generating && stableFor >= 3000) return text
     }
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(800)
   }
   throw new Error('Timed out waiting for GPT Director response')
 }
