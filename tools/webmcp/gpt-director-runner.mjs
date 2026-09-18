@@ -100,21 +100,74 @@ async function connectRelay() {
   return { client, relayLog }
 }
 
-async function waitForTools(client, timeoutMs) {
+export async function waitForTools(client, timeoutMs) {
   const deadline = Date.now() + timeoutMs
+  let lastDiagnostic = ''
+
   while (Date.now() < deadline) {
-    const listed = await client.listTools()
-    const found = {}
-    let complete = true
-    for (const name of REQUIRED_TOOLS) {
-      const tool = findRelayedTool(listed.tools, name)
-      if (!tool) complete = false
-      else found[name] = tool
+    try {
+      // MCP-B exposes browser sources and dynamic tools through management tools.
+      // Prime discovery the same way as the proven relay smoke test before relying
+      // on MCP tools/list; otherwise tools/list can remain stale even while the
+      // Studio page already shows 6/6 registered tools.
+      const sourcesResult = await client.callTool({
+        name: 'webmcp_list_sources',
+        arguments: {},
+      })
+      if (sourcesResult.isError) {
+        throw new Error(firstText(sourcesResult) || 'webmcp_list_sources failed')
+      }
+      const sources = resultObject(sourcesResult, 'webmcp_list_sources')
+      const sourcesText = JSON.stringify(sources)
+      const studioSourceConnected = sourcesText.includes('127.0.0.1:5174')
+        || sourcesText.includes('localhost:5174')
+
+      if (!studioSourceConnected) {
+        lastDiagnostic = 'Studio browser source not connected to relay'
+      } else {
+        const managementResult = await client.callTool({
+          name: 'webmcp_list_tools',
+          arguments: {},
+        })
+        if (managementResult.isError) {
+          throw new Error(firstText(managementResult) || 'webmcp_list_tools failed')
+        }
+        const management = resultObject(managementResult, 'webmcp_list_tools')
+        const managementText = JSON.stringify(management)
+        const managementComplete = REQUIRED_TOOLS.every((name) => managementText.includes(name))
+
+        if (!managementComplete) {
+          lastDiagnostic = 'Relay management API does not yet expose all production tools'
+        } else {
+          const listed = await client.listTools()
+          const found = {}
+          let complete = true
+          for (const name of REQUIRED_TOOLS) {
+            const tool = findRelayedTool(listed.tools, name)
+            if (!tool) complete = false
+            else found[name] = tool
+          }
+          if (complete) return found
+
+          const visibleNames = Array.isArray(listed.tools)
+            ? listed.tools.map((tool) => tool && tool.name).filter(Boolean)
+            : []
+          lastDiagnostic = 'Relay management sees production tools but MCP tools/list is stale: '
+            + visibleNames.join(', ')
+        }
+      }
+    } catch (error) {
+      lastDiagnostic = error instanceof Error ? error.message : String(error)
     }
-    if (complete) return found
+
     await new Promise((resolve) => setTimeout(resolve, 400))
   }
-  throw new Error('Studio WebMCP production tools were not discovered')
+
+  throw directorError(
+    'DIRECTOR_WEBMCP_TOOLS_NOT_DISCOVERED',
+    'Studio WebMCP production tools were not discovered'
+      + (lastDiagnostic ? ': ' + lastDiagnostic : ''),
+  )
 }
 
 async function readTask(client, tool, taskId) {
