@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
-import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt } from '../gpt-director-runner.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -68,4 +68,18 @@ test('director prompt includes selected pages and strict result fields', () => {
   assert.match(prompt, /sourceUnderstanding/)
   assert.match(prompt, /imagePrompt/)
   assert.match(prompt, /videoPrompt/)
+})
+
+
+test('completeJsonResponse detects finished production payload', () => {
+  const text = JSON.stringify({
+    sourceUnderstanding: { summary: 'ok' },
+    creativeStory: { title: 'Demo' },
+    characterDefinitions: [],
+    sceneDefinitions: [],
+    shots: [{ shotId: 'S01' }],
+  })
+  assert.equal(completeJsonResponse(text), true)
+  assert.equal(completeJsonResponse('{"creativeStory":{"title":"Demo"},"shots":['), false)
+  assert.equal(completeJsonResponse('{"creativeStory":{"title":"Demo"},"shots":[]}'), false)
 })
