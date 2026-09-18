@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
-import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, parseableJsonResponse, validateProductionResult, isNewAssistantResponse, jsonRepairPrompt, waitForTools } from '../gpt-director-runner.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, parseableJsonResponse, validateProductionResult, isNewAssistantResponse, jsonRepairPrompt, waitForTools, withTimeout } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -111,6 +111,13 @@ test('recycled assistant node counts as a new response when text changes', () =>
   assert.equal(isNewAssistantResponse(1, 'new answer', baseline), true)
   assert.equal(isNewAssistantResponse(1, 'old answer', baseline), false)
   assert.equal(isNewAssistantResponse(2, 'another answer', baseline), true)
+})
+
+test('director relay operations have a real bounded timeout', async () => {
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 20, 'relay probe'),
+    (error) => error?.code === 'DIRECTOR_WEBMCP_TIMEOUT' && /relay probe timed out/.test(error.message),
+  )
 })
 
 test('director relay discovery primes browser source and management tools before tools/list', async () => {
