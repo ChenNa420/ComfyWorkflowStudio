@@ -46,6 +46,23 @@ export function findRelayedTool(tools, baseName) {
     || null
 }
 
+export async function withTimeout(promise, ms, label) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(directorError('DIRECTOR_WEBMCP_TIMEOUT', label + ' timed out')),
+          ms,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export function parseJsonObject(text) {
   const raw = String(text || '').trim()
   const unfenced = raw.replace(/^\x60\x60\x60(?:json)?\s*/i, '').replace(/\s*\x60\x60\x60$/i, '').trim()
@@ -96,7 +113,7 @@ async function connectRelay() {
     { name: 'comfy-workflow-studio-gpt-director-auto', version: '1.0.0' },
     { capabilities: {}, versionNegotiation: { mode: 'auto' } },
   )
-  await client.connect(transport)
+  await withTimeout(client.connect(transport), 15000, 'WebMCP relay connect')
   return { client, relayLog }
 }
 
@@ -110,10 +127,14 @@ export async function waitForTools(client, timeoutMs) {
       // Prime discovery the same way as the proven relay smoke test before relying
       // on MCP tools/list; otherwise tools/list can remain stale even while the
       // Studio page already shows 6/6 registered tools.
-      const sourcesResult = await client.callTool({
-        name: 'webmcp_list_sources',
-        arguments: {},
-      })
+      const sourcesResult = await withTimeout(
+        client.callTool({
+          name: 'webmcp_list_sources',
+          arguments: {},
+        }),
+        Math.min(5000, Math.max(1000, deadline - Date.now())),
+        'webmcp_list_sources',
+      )
       if (sourcesResult.isError) {
         throw new Error(firstText(sourcesResult) || 'webmcp_list_sources failed')
       }
@@ -125,10 +146,14 @@ export async function waitForTools(client, timeoutMs) {
       if (!studioSourceConnected) {
         lastDiagnostic = 'Studio browser source not connected to relay'
       } else {
-        const managementResult = await client.callTool({
-          name: 'webmcp_list_tools',
-          arguments: {},
-        })
+        const managementResult = await withTimeout(
+          client.callTool({
+            name: 'webmcp_list_tools',
+            arguments: {},
+          }),
+          Math.min(5000, Math.max(1000, deadline - Date.now())),
+          'webmcp_list_tools',
+        )
         if (managementResult.isError) {
           throw new Error(firstText(managementResult) || 'webmcp_list_tools failed')
         }
@@ -139,7 +164,11 @@ export async function waitForTools(client, timeoutMs) {
         if (!managementComplete) {
           lastDiagnostic = 'Relay management API does not yet expose all production tools'
         } else {
-          const listed = await client.listTools()
+          const listed = await withTimeout(
+            client.listTools(),
+            Math.min(5000, Math.max(1000, deadline - Date.now())),
+            'MCP tools/list',
+          )
           const found = {}
           let complete = true
           for (const name of REQUIRED_TOOLS) {
