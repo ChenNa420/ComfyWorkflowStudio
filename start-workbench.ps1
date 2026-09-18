@@ -4,9 +4,11 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ApiPort = 8100
 $WebPort = 5174
 $RelayPort = 9333
+$CdpPort = 9222
 $ComfyUrl = 'http://127.0.0.1:8188'
 $WebUrl = 'http://127.0.0.1:5174'
 $ApiUrl = 'http://127.0.0.1:8100'
+$CdpUrl = 'http://127.0.0.1:9222'
 $Python = Join-Path $Root '.venv\Scripts\python.exe'
 
 function Get-PortOwner([int]$Port) {
@@ -134,6 +136,28 @@ if (-not $relayOwner -and $nodeMajor -ge 22) {
     Write-Host "[WARN] WebMCP Relay requires Node.js 22+; current Node major: $nodeMajor" -ForegroundColor Yellow
 }
 
+$cdpReady = $false
+try {
+    $null = Invoke-WebRequest -UseBasicParsing -Uri "$CdpUrl/json/version" -TimeoutSec 2
+    $cdpReady = $true
+} catch {}
+
+if (-not $cdpReady) {
+    $cdpScript = Join-Path $Root 'tools\chatgpt-image\start-cdp-chrome.cmd'
+    if (Test-Path $cdpScript) {
+        Write-Host "[INFO] Starting dedicated ChatGPT Chrome on port $CdpPort..." -ForegroundColor Cyan
+        Start-Process cmd.exe -WorkingDirectory $Root -ArgumentList '/c', ('"' + $cdpScript + '"')
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 750
+            try {
+                $null = Invoke-WebRequest -UseBasicParsing -Uri "$CdpUrl/json/version" -TimeoutSec 2
+                $cdpReady = $true
+            } catch {}
+        } while (-not $cdpReady -and (Get-Date) -lt $deadline)
+    }
+}
+
 $apiReady = Wait-Http "$ApiUrl/api/health" 60
 $webReady = Wait-Http $WebUrl 60
 
@@ -141,12 +165,6 @@ $comfyReady = $false
 try {
     $null = Invoke-WebRequest -UseBasicParsing -Uri "$ComfyUrl/system_stats" -TimeoutSec 2
     $comfyReady = $true
-} catch {}
-
-$cdpReady = $false
-try {
-    $null = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 2
-    $cdpReady = $true
 } catch {}
 
 $imageDeps = Test-Path (Join-Path $Root 'tools\chatgpt-image\node_modules\playwright-core')
