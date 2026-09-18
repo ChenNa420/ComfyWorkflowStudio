@@ -30,7 +30,9 @@ class FakeWorker:
         self.image_path = image_path
         self.calls = []
         self.story_calls = []
+        self.collect_calls = []
         self.login_calls = []
+        self.collect_response = {'ok': True, 'pending': True, 'repaired': False}
 
     def installation_status(self):
         return {'node': True, 'worker': True, 'dependencies': True, 'profileExists': True, 'readyForCheck': True}
@@ -55,7 +57,12 @@ class FakeWorker:
             'promptLength': len(payload.get('prompt') or ''),
             'url': payload.get('gptUrl'),
             'browserMode': 'cdp',
+            'assistantBaseline': {'count': 0, 'lastHash': 'baseline'},
         }
+
+    def collect_story(self, payload):
+        self.collect_calls.append(payload)
+        return self.collect_response
 
     def generate(self, payload):
         self.calls.append(payload)
@@ -90,6 +97,7 @@ class GPTImageServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         store = GPTDirectorStore(self.root / 'storage' / 'gpt-director')
+        self.store = store
         source = GPTDirectorSource(
             token='token',
             name='comic',
@@ -158,6 +166,48 @@ class GPTImageServiceTests(unittest.TestCase):
         self.worker.cdp_ready = lambda: False
         self.service.prepare_story(self.task_id, 'manual story prompt', target)
         self.assertEqual(self.worker.login_calls, [target])
+
+    def test_collect_story_returns_pending_before_new_assistant_reply(self):
+        source = GPTDirectorSource(
+            token='token-2',
+            name='comic',
+            filename='comic-2.pdf',
+            pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/p1', thumbnailUrl='/p1?t=1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.service.prepare_story(task.id, 'manual story prompt', 'https://chatgpt.com/g/test-manual-director')
+        value = self.service.collect_story(task.id)
+        self.assertTrue(value['pending'])
+        self.assertEqual(len(self.worker.collect_calls), 1)
+        self.assertEqual(self.worker.collect_calls[0]['assistantBaseline']['lastHash'], 'baseline')
+
+    def test_collect_story_imports_and_completes_valid_result(self):
+        source = GPTDirectorSource(
+            token='token-3',
+            name='comic',
+            filename='comic-3.pdf',
+            pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/p1', thumbnailUrl='/p1?t=1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.service.prepare_story(task.id, 'manual story prompt', 'https://chatgpt.com/g/test-manual-director')
+        self.worker.collect_response = {
+            'ok': True,
+            'pending': False,
+            'repaired': True,
+            'result': make_result().model_dump(mode='json'),
+        }
+        value = self.service.collect_story(task.id)
+        self.assertFalse(value['pending'])
+        self.assertTrue(value['repaired'])
+        self.assertEqual(value['status'], 'COMPLETED')
+        self.assertEqual(value['title'], 'Demo')
+        self.assertEqual(value['shotCount'], 1)
+        self.assertEqual(self.store.load_task(task.id).status, 'COMPLETED')
+        self.assertIsNotNone(self.store.load_result(task.id))
 
     def test_generates_and_binds_frame(self):
         job = self.service.create_job(self.task_id, 'S01')
