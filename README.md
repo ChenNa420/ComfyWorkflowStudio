@@ -8,6 +8,7 @@
 - Certified Production Run、串行任务、输出与素材管理
 - 本地漫画扫描、页面预览、GPT Director Story/Shot/Episode
 - WebMCP 将所选漫画页以 ImageContent 交给“童语工坊 · AI动画编剧导演”并接收 Story / Shots / Prompts
+- “创建并开始 GPT 创作”会自动读取全部 selectedPages、上传真实漫画页、等待 GPT 返回严格 JSON，并经 WebMCP 自动写回 Studio
 - 普通 Chrome/Edge 本地开发时通过 MCP-B 5.1.0 补齐 `document.modelContext`，并可桥接到 `127.0.0.1:9333` 的本地 MCP relay
 - ChatGPT Web Image Worker 通过本地 Chrome CDP 生成 Shot 关键帧并回填到 Studio
 - ComfyUI 继续负责后续工作流执行；图片引擎不依赖 OpenAI API Key
