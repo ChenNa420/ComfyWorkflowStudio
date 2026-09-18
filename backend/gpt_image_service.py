@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 from PIL import Image
 
@@ -107,6 +108,15 @@ class NodeImageWorker:
 
     def check(self) -> dict:
         return self._run('check', timeout=60)
+
+    def cdp_ready(self) -> bool:
+        if not self.cdp_url:
+            return True
+        try:
+            with urlopen(self.cdp_url.rstrip('/') + '/json/version', timeout=1.5) as response:
+                return 200 <= int(response.status) < 300
+        except Exception:
+            return False
 
     def prepare_story(self, payload: dict) -> dict:
         return self._run('prepare-story', payload, timeout=120)
@@ -203,8 +213,10 @@ class GPTImageService:
             raise GPTImageError('SOURCE_IMAGES_REQUIRED', 'GPT Director task has no selected source pages')
 
         target_url = str(gpt_url or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
-        self.worker.start_login(target_url)
-        time.sleep(2.0)
+        cdp_ready = getattr(self.worker, 'cdp_ready', None)
+        if callable(cdp_ready) and not cdp_ready():
+            self.worker.start_login(target_url)
+            time.sleep(2.0)
 
         api_base = os.getenv('CWS_STUDIO_API_URL', 'http://127.0.0.1:8100').rstrip('/')
         payload = {
