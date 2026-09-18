@@ -1,0 +1,15 @@
+{
+  "name": "comfy-workflow-studio-webmcp-tools",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "smoke": "node smoke-test.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@mcp-b/webmcp-local-relay": "5.1.0",
+    "@modelcontextprotocol/client": "2.0.0"
+  }
+}
