@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ApiPort = 8100
 $WebPort = 5174
+$RelayPort = 9333
 $ComfyUrl = 'http://127.0.0.1:8188'
 $WebUrl = 'http://127.0.0.1:5174'
 $ApiUrl = 'http://127.0.0.1:8100'
@@ -125,6 +126,8 @@ try {
 } catch {}
 
 $imageDeps = Test-Path (Join-Path $Root 'tools\chatgpt-image\node_modules\playwright-core')
+$relayOwner = Get-PortOwner $RelayPort
+$relayReady = $null -ne $relayOwner
 
 Write-Host ''
 Write-Host '----------------------------------------'
@@ -133,6 +136,7 @@ Write-Host ("Studio Web    {0}  {1}" -f ($(if ($webReady) { 'PASS' } else { 'FAI
 Write-Host ("ComfyUI       {0}" -f ($(if ($comfyReady) { 'CONNECTED' } else { 'NOT RUNNING' }))) -ForegroundColor $(if ($comfyReady) { 'Green' } else { 'Yellow' })
 Write-Host ("ChatGPT CDP   {0}" -f ($(if ($cdpReady) { 'CONNECTED' } else { 'NOT RUNNING' }))) -ForegroundColor $(if ($cdpReady) { 'Green' } else { 'Yellow' })
 Write-Host ("Image Worker  {0}" -f ($(if ($imageDeps) { 'INSTALLED' } else { 'DEPENDENCIES MISSING' }))) -ForegroundColor $(if ($imageDeps) { 'Green' } else { 'Yellow' })
+Write-Host ("WebMCP Relay  {0}  ws://127.0.0.1:{1}" -f ($(if ($relayReady) { 'CONNECTED' } else { 'NOT RUNNING' })), $RelayPort) -ForegroundColor $(if ($relayReady) { 'Green' } else { 'Yellow' })
 Write-Host 'LM Studio     NOT USED'
 Write-Host '----------------------------------------'
 
