@@ -46,6 +46,15 @@ function Wait-Http([string]$Url, [int]$TimeoutSeconds = 60) {
     return $false
 }
 
+function Is-ComfyWorkflowStudioApi([string]$Url) {
+    try {
+        $response = Invoke-RestMethod -Uri "$Url/api/health" -TimeoutSec 3
+        return $response.service -eq 'ComfyWorkflowStudio'
+    } catch {
+        return $false
+    }
+}
+
 Write-Host ''
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host ' ComfyWorkflowStudio' -ForegroundColor Cyan
@@ -72,8 +81,9 @@ if (-not (Test-Path (Join-Path $Root 'node_modules'))) {
 $apiOwner = Get-PortOwner $ApiPort
 $apiState = 'STARTING'
 if ($apiOwner) {
-    if (Is-ProjectProcess $apiOwner 'api') {
+    if ((Is-ProjectProcess $apiOwner 'api') -or (Is-ComfyWorkflowStudioApi $ApiUrl)) {
         $apiState = 'ALREADY RUNNING'
+        Write-Host "[INFO] Reusing existing ComfyWorkflowStudio API on port $ApiPort (PID $($apiOwner.Pid))." -ForegroundColor Green
     } else {
         Write-Host "[FAIL] API port $ApiPort is occupied by PID $($apiOwner.Pid) $($apiOwner.Name)" -ForegroundColor Red
         Write-Host "       $($apiOwner.CommandLine)"
