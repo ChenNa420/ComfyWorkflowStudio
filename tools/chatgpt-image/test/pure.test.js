@@ -126,7 +126,8 @@ test("repairs production-style canonical dialogue in videoPrompt into valid JSON
   assert.equal(parsed.shots.length, 2);
   assert.equal(parsed.shots[0].videoPrompt.includes('"Let\'s make a tiny garden!"'), true);
   assert.equal(parsed.shots[1].videoPrompt.includes('"A stone and a leaf!"'), true);
-  assert.equal(validateStoryResult(normalizeStoryResultShape(parsed)), normalizeStoryResultShape(parsed));
+  const normalized = normalizeStoryResultShape(parsed);
+  assert.equal(validateStoryResult(normalized), normalized);
 });
 
 test("story parser keeps punctuation after repaired dialogue quotes", () => {
