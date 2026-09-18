@@ -142,6 +142,28 @@ class GPTDirectorAutoService:
     def status(self) -> dict[str, Any]:
         return self.runner.status()
 
+    def recover_interrupted_jobs(self) -> int:
+        if not self.jobs_root.exists():
+            return 0
+        recovered = 0
+        for path in self.jobs_root.glob('gda-*.json'):
+            try:
+                job = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if job.get('status') not in {'QUEUED', 'RUNNING'}:
+                continue
+            job['status'] = 'FAILED'
+            job['completedAt'] = _now()
+            job['errorCode'] = 'DIRECTOR_AUTO_INTERRUPTED'
+            job['errorMessage'] = (
+                'GPT Director automatic run was interrupted by a backend restart. '
+                'Start a new automatic run.'
+            )
+            self._atomic_write(path, job)
+            recovered += 1
+        return recovered
+
     def _job_path(self, job_id: str) -> Path:
         if not JOB_ID_RE.fullmatch(job_id):
             raise GPTDirectorAutoError('INVALID_JOB_ID', 'Invalid GPT Director auto job ID')
