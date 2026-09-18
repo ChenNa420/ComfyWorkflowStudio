@@ -55,6 +55,18 @@ async function downloadSourcePages(outputDir, sources) {
 }
 
 export function composeGenerationPrompt(input) {
+  const currentShot = String(input?.prompt || "").trim();
+  if (!currentShot) {
+    throw new ImageWorkerError("Shot image prompt is required", "IMAGE_PROMPT_REQUIRED");
+  }
+
+  // Production keyframes use the exact imagePrompt returned by GPT Director.
+  // Keeping this as an explicit mode avoids silently rewriting a prompt that the
+  // user has already reviewed in the Studio result panel.
+  if (String(input?.promptMode || "").toLowerCase() === "direct") {
+    return currentShot;
+  }
+
   const sections = [
     "Generate exactly one standalone image from this production brief. Return an image, not a text-only answer.",
   ];
@@ -64,7 +76,7 @@ export function composeGenerationPrompt(input) {
   if (String(input.styleProfile || "").trim()) {
     sections.push(`[Visual style]\n${String(input.styleProfile).trim()}`);
   }
-  sections.push(`[Current shot]\n${String(input.prompt || "").trim()}`);
+  sections.push(`[Current shot]\n${currentShot}`);
   if (String(input.negativePrompt || "").trim()) {
     sections.push(`[Avoid]\n${String(input.negativePrompt).trim()}`);
   }
