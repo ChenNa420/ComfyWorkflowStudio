@@ -58,6 +58,7 @@ const activeTask = ref<DirectorTask|null>(null)
 const gptResult = ref<DirectorResult|null>(null)
 const manualJson = ref('')
 const promptCopied = ref(false)
+const preparingGpt = ref(false)
 const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
 const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
 const webMcpAvailable = ref(false)
@@ -463,13 +464,25 @@ async function copyTaskPrompt(){
   }catch{error.value='浏览器未允许复制，请手动复制任务说明。'}
 }
 
-async function openGpt(){
-  if(!activeTask.value)return
-  let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
-  if(!/^https?:\/\//i.test(url))url=`https://${url}`
-  window.open(url,'_blank','noopener,noreferrer')
-  await copyTaskPrompt()
-  notice.value='已打开童语工坊，并复制任务说明。请上传上方所选源页后粘贴发送。'
+async function prepareGptDraft(){
+  if(!activeTask.value){error.value='请先创建手动 GPT Task。';return}
+  if(!directorPrompt.value){error.value='任务说明为空。';return}
+  preparingGpt.value=true
+  error.value=''
+  notice.value='正在打开童语工坊，并自动上传所选漫画页与填写任务说明…'
+  try{
+    let url=gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL
+    if(!/^https?:\/\//i.test(url))url=`https://${url}`
+    const value=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(activeTask.value.id)}/prepare-story`,{
+      prompt:directorPrompt.value,
+      gptUrl:url,
+    })
+    notice.value=`已准备完成：${value.attachmentCount||activeTask.value.source.selectedPages.length} 张漫画页和任务说明已放入童语工坊。请检查后由你手动点击“发送”。`
+  }catch(value){
+    error.value=value instanceof Error?value.message:'无法准备童语工坊任务'
+  }finally{
+    preparingGpt.value=false
+  }
 }
 
 function persistBridgeState(){
@@ -670,13 +683,13 @@ onUnmounted(()=>lifecycle.abort())
       <div>
         <span class="eyebrow">COMIC STORY · GPT DIRECTOR MANUAL</span>
         <h2>漫画拆故事 · GPT 编剧导演</h2>
-        <p>选择 1–12 个 PDF/漫画页面，创建手动 GPT Task。你在“童语工坊 · AI动画编剧导演”中上传所选页面并粘贴任务说明，GPT 返回故事 JSON 后再粘贴回工作台校验导入。</p>
+        <p>选择 1–12 个 PDF/漫画页面，创建手动 GPT Task。点击“准备到童语工坊 GPT”后，系统会自动上传所选页面并填好任务说明；你只负责检查后点击发送，再把 GPT 返回的故事 JSON 粘贴回工作台。</p>
       </div>
       <div class="bridge-pill ok">
         <Sparkles :size="16"/>
         <div>
           <b>手动模式</b>
-          <small>Task → GPT → JSON 导入</small>
+          <small>自动准备 → 你手动发送 → JSON 导入</small>
           <small>WebMCP 仅保留开发调试</small>
         </div>
       </div>
@@ -752,12 +765,12 @@ onUnmounted(()=>lifecycle.abort())
           <div v-if="activeTask" class="task-summary">
             <div class="task-status"><CheckCircle2 :size="18"/><div><b>{{activeTask.status==='COMPLETED'?'结果已返回':'手动 Task 已创建'}}</b><small>{{activeTask.updatedAt.replace('T',' ').slice(0,19)}}</small></div></div>
             <dl><div><dt>Task ID</dt><dd>{{activeTask.id}}</dd></div><div><dt>漫画</dt><dd>{{activeTask.source.filename}}</dd></div><div><dt>选择页面</dt><dd>{{activeTask.source.selectedPages.join(', ')}}</dd></div><div><dt>改编设置</dt><dd>{{settings.targetAge}} · {{settings.level}} · {{settings.style}} · {{settings.adaptationStrength==='high'?'高度原创':settings.adaptationStrength==='medium'?'中度':'轻度'}}</dd></div></dl>
-            <div class="manual-page-links"><span>先打开并保存/上传这些源页：</span><a v-for="page in activeTask.source.selectedPages" :key="page" :href="`/api/comic-story/gpt-director/tasks/${activeTask.id}/pages/${page}/image`" target="_blank" rel="noopener">P{{page}}</a></div>
+            <div class="manual-page-links"><span>源页备用入口（正常无需手动下载）：</span><a v-for="page in activeTask.source.selectedPages" :key="page" :href="`/api/comic-story/gpt-director/tasks/${activeTask.id}/pages/${page}/image`" target="_blank" rel="noopener">P{{page}}</a></div>
           </div>
 
-          <div class="manual-flow-guide"><b>手动流程</b><p>① 创建 Task　② 打开上面的源页并在 GPT 中上传　③ 复制任务说明并发送　④ 将 GPT 返回的完整 JSON 粘贴到下方导入。</p></div>
+          <div class="manual-flow-guide"><b>半自动手动流程</b><p>① 创建 Task　② 点击“准备到童语工坊 GPT”，系统自动上传全部所选漫画页并填好任务说明　③ 你检查内容后手动点击“发送”　④ 将 GPT 返回的完整 JSON 粘贴到下方导入。</p></div>
           <label class="gpt-url">童语工坊 GPT 页面地址<input v-model="gptUrl" placeholder="粘贴你的自定义 GPT 链接；留空则使用默认童语工坊" @change="saveGptUrl"/></label>
-          <div class="task-actions"><button class="gpt-open" :disabled="!activeTask" @click="openGpt"><Sparkles :size="16"/>打开童语工坊 GPT<ExternalLink :size="15"/></button><button class="secondary" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="15"/>{{promptCopied?'已复制':'复制任务说明'}}</button></div>
+          <div class="task-actions"><button class="gpt-open" :disabled="!activeTask||preparingGpt" @click="prepareGptDraft"><LoaderCircle v-if="preparingGpt" class="spin" :size="16"/><Sparkles v-else :size="16"/>{{preparingGpt?'正在准备…':'准备到童语工坊 GPT'}}</button><button class="secondary" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="15"/>{{promptCopied?'已复制':'复制任务说明'}}</button></div>
 
           <details class="developer-tools">
             <summary>开发调试：WebMCP / Probe（可选，不影响手动流程）</summary>
