@@ -94,16 +94,54 @@ export class BrowserSession {
     );
   }
 
-  async getExistingChatGPTPage() {
+  async getExistingChatGPTPage(targetUrl = "") {
     const context = await this.getContext();
-    const page = [...context.pages()].reverse().find(isChatGPTPage);
-    if (!page) {
+    const pages = [...context.pages()].filter(isChatGPTPage);
+    if (!pages.length) {
       throw new ImageWorkerError(
         "No open ChatGPT page was found in the dedicated browser",
         "CHATGPT_PAGE_NOT_FOUND",
       );
     }
-    return page;
+
+    const rawTarget = String(targetUrl || "").trim();
+    if (rawTarget) {
+      let target = null;
+      try { target = new URL(rawTarget); } catch {}
+      if (target) {
+        const targetPath = target.pathname.replace(/\/$/, "");
+        const exact = pages.find((candidate) => {
+          try {
+            const current = new URL(candidate.url());
+            return current.hostname.toLowerCase() === target.hostname.toLowerCase()
+              && current.pathname.replace(/\/$/, "") === targetPath;
+          } catch {
+            return false;
+          }
+        });
+        if (exact) return exact;
+
+        // Custom GPT conversations can extend the /g/<gpt-slug> path after
+        // the user manually sends the prepared prompt. Prefer that same GPT
+        // conversation instead of whichever ChatGPT tab happened to open last.
+        if (targetPath.startsWith("/g/")) {
+          const related = pages.find((candidate) => {
+            try {
+              const current = new URL(candidate.url());
+              const currentPath = current.pathname.replace(/\/$/, "");
+              return current.hostname.toLowerCase() === target.hostname.toLowerCase()
+                && (currentPath === targetPath || currentPath.startsWith(targetPath + "/"));
+            } catch {
+              return false;
+            }
+          });
+          if (related) return related;
+        }
+      }
+    }
+
+    if (pages.length === 1) return pages[0];
+    return pages[pages.length - 1];
   }
 
   async getPage(targetUrl) {
