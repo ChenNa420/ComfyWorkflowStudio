@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
@@ -22,6 +25,14 @@ test('findRelayedTool supports unique and suffixed relay names', () => {
 
 test('firstText returns MCP text content', () => {
   assert.equal(firstText({ content: [{ type: 'text', text: 'hello' }] }), 'hello')
+})
+
+test('persistent relay launcher uses pinned local CLI instead of npx', async () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const script = await fs.readFile(path.resolve(here, '../start-local-relay.cmd'), 'utf8')
+  assert.match(script, /node "%RELAY_CLI%"/)
+  assert.match(script, /node_modules\\@mcp-b\\webmcp-local-relay\\dist\\cli\.mjs/)
+  assert.doesNotMatch(script, /npx\s+-y\s+@mcp-b\/webmcp-local-relay/)
 })
 
 
