@@ -238,8 +238,53 @@ export function completeJsonResponse(text) {
   }
 }
 
-async function sendPrompt(page, prompt, timeoutMs) {
-  const beforeCount = await page.locator("[data-message-author-role='assistant']").count().catch(() => 0)
+async function waitForAssistantResponse(page, baseline, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let stableText = ''
+  let stableSince = 0
+
+  while (Date.now() < deadline) {
+    const turns = page.locator("[data-message-author-role='assistant']")
+    const count = await turns.count().catch(() => 0)
+    const text = count > 0 ? (await turns.last().innerText().catch(() => '')).trim() : ''
+
+    // Some ChatGPT layouts recycle the same assistant DOM node. Treat a changed
+    // final assistant text as a new response even when the node count is unchanged.
+    const isNewResponse = Boolean(
+      text
+      && (
+        count > baseline.count
+        || text !== baseline.lastText
+      )
+    )
+
+    if (isNewResponse) {
+      const generating = await isGenerating(page)
+      if (text === stableText) {
+        if (!stableSince) stableSince = Date.now()
+      } else {
+        stableText = text
+        stableSince = Date.now()
+      }
+
+      const stableFor = Date.now() - stableSince
+      if (completeJsonResponse(text) && stableFor >= 1500) return text
+      if (!generating && stableFor >= 2500) return text
+    }
+
+    await page.waitForTimeout(700)
+  }
+
+  throw new Error('Timed out waiting for GPT Director response')
+}
+
+async function sendComposerPrompt(page, prompt, timeoutMs) {
+  const turns = page.locator("[data-message-author-role='assistant']")
+  const beforeCount = await turns.count().catch(() => 0)
+  const beforeText = beforeCount > 0
+    ? (await turns.last().innerText().catch(() => '')).trim()
+    : ''
+
   const box = page.locator(SELECTORS.prompt).first()
   await box.waitFor({ state: 'visible', timeout: 20000 })
   try {
@@ -253,31 +298,47 @@ async function sendPrompt(page, prompt, timeoutMs) {
   if ((await send.count()) > 0 && (await send.isVisible().catch(() => false))) await send.click()
   else await page.keyboard.press('Enter')
 
-  const deadline = Date.now() + timeoutMs
-  let stableText = ''
-  let stableSince = 0
-  while (Date.now() < deadline) {
-    const turns = page.locator("[data-message-author-role='assistant']")
-    const count = await turns.count().catch(() => 0)
-    if (count > beforeCount) {
-      const text = (await turns.last().innerText().catch(() => '')).trim()
-      const generating = await isGenerating(page)
-      if (text && text === stableText) {
-        if (!stableSince) stableSince = Date.now()
-      } else {
-        stableText = text
-        stableSince = text ? Date.now() : 0
-      }
+  return waitForAssistantResponse(
+    page,
+    { count: beforeCount, lastText: beforeText },
+    timeoutMs,
+  )
+}
 
-      const stableFor = stableSince ? Date.now() - stableSince : 0
-      // ChatGPT can leave a stop/generating control visible briefly after the final
-      // JSON is already complete. A parseable stable production payload is enough.
-      if (text && completeJsonResponse(text) && stableFor >= 1800) return text
-      if (text && !generating && stableFor >= 3000) return text
+export function jsonRepairPrompt(parseError) {
+  return [
+    '你刚才返回的内容外形是 JSON，但无法被标准 JSON.parse() 解析。',
+    '请保持故事、角色、场景、镜头数量、对白、imagePrompt、videoPrompt、negativePrompt、sourcePages 的内容不变，只修复 JSON 语法。',
+    '特别检查所有 JSON 字符串内部出现的双引号，必须转义为 \\"。',
+    '例如不能写： "english": "Bobo, "wait!""',
+    '必须写成合法 JSON，例如： "english": "Bobo, \\"wait!\\""。',
+    '不要解释，不要 Markdown 代码围栏，只返回一个完整合法 JSON 对象。',
+    parseError ? '解析错误：' + String(parseError).slice(0, 500) : '',
+  ].filter(Boolean).join('\n')
+}
+
+async function sendPrompt(page, prompt, timeoutMs) {
+  const firstText = await sendComposerPrompt(page, prompt, timeoutMs)
+  try {
+    parseJsonObject(firstText)
+    return firstText
+  } catch (firstError) {
+    console.error('[director] GPT returned invalid JSON; requesting one controlled syntax repair...')
+    const repairedText = await sendComposerPrompt(
+      page,
+      jsonRepairPrompt(firstError instanceof Error ? firstError.message : String(firstError)),
+      Math.min(timeoutMs, 180000),
+    )
+    try {
+      parseJsonObject(repairedText)
+      return repairedText
+    } catch (secondError) {
+      throw new Error(
+        'GPT returned invalid JSON after one repair attempt: '
+        + (secondError instanceof Error ? secondError.message : String(secondError)),
+      )
     }
-    await page.waitForTimeout(800)
   }
-  throw new Error('Timed out waiting for GPT Director response')
 }
 
 async function runChatGPT(task, files, timeoutMs) {
