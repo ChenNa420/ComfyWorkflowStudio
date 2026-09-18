@@ -34,6 +34,7 @@ function Is-ProjectProcess($Owner, [string]$Kind) {
     if ($line -notmatch $rootEscaped) { return $false }
     if ($Kind -eq 'api') { return $line -match 'uvicorn' -and $line -match 'backend\.app:app' }
     if ($Kind -eq 'web') { return $line -match 'vite|npm(.cmd)?\s+run\s+dev' }
+    if ($Kind -eq 'relay') { return $line -match 'webmcp-local-relay' -and $line -match 'cli\.mjs' }
     return $false
 }
 
@@ -120,20 +121,62 @@ if ($webOwner) {
 
 $relayOwner = Get-PortOwner $RelayPort
 $relayStartedByLauncher = $false
-if (-not $relayOwner -and $nodeMajor -ge 22) {
-    $relayScript = Join-Path $Root 'tools\webmcp\start-local-relay.cmd'
-    if (Test-Path $relayScript) {
-        Write-Host "[INFO] Starting persistent local WebMCP Relay on port $RelayPort..." -ForegroundColor Cyan
-        Start-Process cmd.exe -WorkingDirectory $Root -ArgumentList '/k', ('"' + $relayScript + '"')
-        $relayStartedByLauncher = $true
-        $deadline = (Get-Date).AddSeconds(15)
-        do {
-            Start-Sleep -Milliseconds 500
-            $relayOwner = Get-PortOwner $RelayPort
-        } while (-not $relayOwner -and (Get-Date) -lt $deadline)
+$relayCli = Join-Path $Root 'tools\webmcp\node_modules\@mcp-b\webmcp-local-relay\dist\cli.mjs'
+$relayLogDir = Join-Path $Root 'storage\logs'
+$relayStdout = Join-Path $relayLogDir 'webmcp-relay.stdout.log'
+$relayStderr = Join-Path $relayLogDir 'webmcp-relay.stderr.log'
+
+if ($relayOwner) {
+    if (Is-ProjectProcess $relayOwner 'relay') {
+        Write-Host "[INFO] Reusing existing ComfyWorkflowStudio WebMCP Relay on port $RelayPort (PID $($relayOwner.Pid))." -ForegroundColor Green
+    } else {
+        Write-Host "[FAIL] Relay port $RelayPort is occupied by PID $($relayOwner.Pid) $($relayOwner.Name)" -ForegroundColor Red
+        Write-Host "       $($relayOwner.CommandLine)"
+        Write-Host '       The launcher will not treat this process as the Studio Relay.' -ForegroundColor Yellow
     }
-} elseif (-not $relayOwner -and $nodeMajor -lt 22) {
+} elseif ($nodeMajor -lt 22) {
     Write-Host "[WARN] WebMCP Relay requires Node.js 22+; current Node major: $nodeMajor" -ForegroundColor Yellow
+} elseif (-not (Test-Path $relayCli)) {
+    Write-Host '[FAIL] WebMCP Relay local CLI is missing.' -ForegroundColor Red
+    Write-Host "       Expected: $relayCli"
+    Write-Host '       Run: npm install --prefix tools\webmcp' -ForegroundColor Yellow
+} else {
+    New-Item -ItemType Directory -Force -Path $relayLogDir | Out-Null
+    Remove-Item $relayStdout,$relayStderr -Force -ErrorAction SilentlyContinue
+
+    $nodeExe = (Get-Command node -ErrorAction Stop).Source
+    $relayArgs = @(
+        ('"' + $relayCli + '"'),
+        '--host', '127.0.0.1',
+        '--port', [string]$RelayPort,
+        '--widget-origin', 'http://127.0.0.1:5174,http://localhost:5174',
+        '--label', 'ComfyWorkflowStudio'
+    )
+
+    Write-Host "[INFO] Starting persistent local WebMCP Relay on port $RelayPort from pinned local CLI..." -ForegroundColor Cyan
+    $relayProcess = Start-Process -FilePath $nodeExe -WorkingDirectory $Root -ArgumentList $relayArgs -RedirectStandardOutput $relayStdout -RedirectStandardError $relayStderr -PassThru
+
+    $relayStartedByLauncher = $true
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 500
+        $relayOwner = Get-PortOwner $RelayPort
+        if ($relayProcess.HasExited) { break }
+    } while (-not $relayOwner -and (Get-Date) -lt $deadline)
+
+    if (-not $relayOwner -or -not (Is-ProjectProcess $relayOwner 'relay')) {
+        Write-Host "[FAIL] WebMCP Relay did not become ready on port $RelayPort." -ForegroundColor Red
+        if ($relayProcess.HasExited) {
+            Write-Host "       Relay process exited with code $($relayProcess.ExitCode)." -ForegroundColor Red
+        }
+        if (Test-Path $relayStderr) {
+            $relayTail = Get-Content $relayStderr -Tail 20 -ErrorAction SilentlyContinue
+            if ($relayTail) {
+                Write-Host "       Relay stderr: $relayStderr" -ForegroundColor Yellow
+                foreach ($line in $relayTail) { Write-Host "       $line" }
+            }
+        }
+    }
 }
 
 $cdpReady = $false
@@ -169,7 +212,7 @@ try {
 
 $imageDeps = Test-Path (Join-Path $Root 'tools\chatgpt-image\node_modules\playwright-core')
 $relayOwner = Get-PortOwner $RelayPort
-$relayReady = $null -ne $relayOwner
+$relayReady = $null -ne $relayOwner -and (Is-ProjectProcess $relayOwner 'relay')
 
 Write-Host ''
 Write-Host '----------------------------------------'
