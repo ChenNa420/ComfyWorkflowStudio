@@ -97,9 +97,11 @@ The relay does not make a normal ChatGPT web tab automatically discover another 
 
 Keep these running first:
 
-1. ComfyWorkflowStudio Web at `http://127.0.0.1:5174`
-2. The Studio tab showing `WebMCP 已就绪 · 6/6`
-3. `tools\webmcp\start-local-relay.cmd` on port 9333
+1. `start-workbench.cmd` (it now keeps a persistent WebMCP Relay owner on `127.0.0.1:9333` when Node.js 22+ is available)
+2. ComfyWorkflowStudio Web at `http://127.0.0.1:5174`
+3. The Comic Story tab showing `WebMCP 已就绪 · 6/6` and `Relay Embed 已加载`
+
+If the Studio page was open before the relay started, refresh that page once. The smoke-test client deliberately requires an existing relay owner so its stdio relay joins in client mode instead of creating a short-lived server.
 
 Then run:
 
