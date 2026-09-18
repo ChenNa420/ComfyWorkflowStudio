@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import { ImageWorkerError } from "./errors.js";
 
@@ -317,32 +318,115 @@ async function sendRepair(page, originalText, parseError) {
   return waitForAssistantChange(page, baseline, 180000);
 }
 
+async function composerScope(page) {
+  const box = await findPromptBox(page, 20000);
+  const form = box.locator("xpath=ancestor::form[1]");
+  if (await form.count()) return form;
+  return page.locator("form").last();
+}
+
+async function attachmentEvidence(page, filePaths) {
+  const scope = await composerScope(page);
+  const names = filePaths.map((filePath) => path.basename(filePath).toLowerCase());
+  const text = (await scope.innerText().catch(() => "")).toLowerCase();
+  const matchedNames = names.filter((name) => text.includes(name)).length;
+  const visualCount = await scope.locator([
+    "[data-testid*='attachment']",
+    "[data-testid*='file']",
+    "button[aria-label*='Remove attachment']",
+    "button[aria-label*='remove attachment']",
+    "button[aria-label*='移除附件']",
+    "button[aria-label*='删除附件']",
+    "img[src^='blob:']",
+    "img[src*='files.oaiusercontent']",
+  ].join(", ")).count().catch(() => 0);
+  return { matchedNames, visualCount };
+}
+
+async function waitForAttachmentEvidence(page, filePaths, timeoutMs = 9000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const evidence = await attachmentEvidence(page, filePaths);
+    if (evidence.matchedNames >= filePaths.length || evidence.visualCount >= filePaths.length) {
+      return Math.max(evidence.matchedNames, evidence.visualCount);
+    }
+    await page.waitForTimeout(350);
+  }
+  return 0;
+}
+
+async function chooseComposerFileInput(page) {
+  const preferred = page.locator([
+    "input[type='file'][accept*='image']",
+    "input[type='file'][multiple]",
+    "input[type='file']",
+  ].join(", "));
+  const count = await preferred.count();
+  return count ? preferred.nth(count - 1) : null;
+}
+
+async function uploadViaComposerInput(page, filePaths) {
+  const input = await chooseComposerFileInput(page);
+  if (!input) return 0;
+  await input.setInputFiles(filePaths);
+  const assigned = await input.evaluate((element) => element.files?.length || 0).catch(() => 0);
+  if (assigned < filePaths.length) return 0;
+  return waitForAttachmentEvidence(page, filePaths);
+}
+
+async function uploadViaFileChooser(page, filePaths) {
+  const addButton = page.locator([
+    "[data-testid='composer-plus-btn']",
+    "button[aria-label*='Attach']",
+    "button[aria-label*='attach']",
+    "button[aria-label*='上传']",
+    "button[aria-label*='添加']",
+    "button[aria-label*='附件']",
+  ].join(", ")).last();
+
+  if (!(await addButton.count()) || !(await addButton.isVisible().catch(() => false))) return 0;
+
+  // Some ChatGPT layouts open the native chooser immediately from the plus button.
+  const directChooser = page.waitForEvent("filechooser", { timeout: 1600 }).catch(() => null);
+  await addButton.click().catch(() => {});
+  let chooser = await directChooser;
+
+  if (!chooser) {
+    await page.waitForTimeout(300);
+    const menuItem = page.getByText(
+      /Add photos|Add files|Upload files|Attach files|上传文件|上传照片|添加照片|添加文件|照片和文件/i,
+    ).last();
+    if (await menuItem.count() && await menuItem.isVisible().catch(() => false)) {
+      const pendingChooser = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
+      await menuItem.click().catch(() => {});
+      chooser = await pendingChooser;
+    }
+  }
+
+  if (!chooser) return 0;
+  await chooser.setFiles(filePaths);
+  return waitForAttachmentEvidence(page, filePaths);
+}
+
 async function uploadFiles(page, filePaths) {
   if (!Array.isArray(filePaths) || !filePaths.length) {
     throw new ImageWorkerError("At least one source image is required", "SOURCE_IMAGES_REQUIRED");
   }
 
-  let input = page.locator("input[type='file']").first();
-  if (!(await input.count())) {
-    const addButton = page.locator([
-      "[data-testid='composer-plus-btn']",
-      "button[aria-label*='Attach']",
-      "button[aria-label*='上传']",
-      "button[aria-label*='添加']",
-    ].join(", ")).first();
-    if (await addButton.count() && await addButton.isVisible().catch(() => false)) {
-      await addButton.click().catch(() => {});
-      await page.waitForTimeout(500);
-    }
-    input = page.locator("input[type='file']").first();
+  let visibleCount = await uploadViaComposerInput(page, filePaths);
+  if (visibleCount < filePaths.length) {
+    visibleCount = await uploadViaFileChooser(page, filePaths);
   }
 
-  if (!(await input.count())) {
-    throw new ImageWorkerError("ChatGPT file upload input was not found", "CHATGPT_UPLOAD_INPUT_MISSING");
+  if (visibleCount < filePaths.length) {
+    throw new ImageWorkerError(
+      `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length})`,
+      "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+    );
   }
 
-  await input.setInputFiles(filePaths);
-  await page.waitForTimeout(Math.min(15000, 2200 + filePaths.length * 650));
+  await page.waitForTimeout(Math.min(12000, 1000 + filePaths.length * 450));
+  return visibleCount;
 }
 
 export class ChatGPTPage {
@@ -362,7 +446,7 @@ export class ChatGPTPage {
   async prepareDraft(prompt, filePaths) {
     await assertAuthenticated(this.page, 20000);
     const assistantBaseline = await assistantSnapshot(this.page);
-    await uploadFiles(this.page, filePaths);
+    const attachmentCount = await uploadFiles(this.page, filePaths);
     const box = await findPromptBox(this.page, 20000);
     try { await box.fill(prompt); }
     catch {
@@ -374,7 +458,7 @@ export class ChatGPTPage {
       ok: true,
       prepared: true,
       sent: false,
-      attachmentCount: filePaths.length,
+      attachmentCount,
       promptLength: String(prompt || "").length,
       assistantBaseline: { count: assistantBaseline.count, lastHash: assistantBaseline.lastHash },
       url: this.page.url(),
