@@ -105,6 +105,29 @@ class GPTDirectorAutoTests(unittest.TestCase):
         self.assertEqual(self.service.director.load_task(self.task.id).status, 'COMPLETED')
         self.assertIsNotNone(self.service.director.load_result(self.task.id))
 
+    def test_recover_interrupted_jobs_marks_stale_running_job_failed(self):
+        stale = {
+            'jobId': 'gda-' + 'a' * 32,
+            'taskId': self.task.id,
+            'status': 'RUNNING',
+            'createdAt': '2026-09-18T00:00:00+00:00',
+            'startedAt': '2026-09-18T00:00:01+00:00',
+            'completedAt': None,
+            'errorCode': None,
+            'errorMessage': None,
+            'result': None,
+        }
+        path = self.service._job_path(stale['jobId'])
+        self.service._atomic_write(path, stale)
+
+        recovered = self.service.recover_interrupted_jobs()
+        saved = self.service.get_job(stale['jobId'])
+
+        self.assertEqual(recovered, 1)
+        self.assertEqual(saved['status'], 'FAILED')
+        self.assertEqual(saved['errorCode'], 'DIRECTOR_AUTO_INTERRUPTED')
+        self.assertIsNotNone(saved['completedAt'])
+
     def test_failed_runner_marks_job_failed(self):
         service = GPTDirectorAutoService(
             self.root,
