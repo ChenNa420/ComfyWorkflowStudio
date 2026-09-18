@@ -183,6 +183,32 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(len(self.worker.collect_calls), 1)
         self.assertEqual(self.worker.collect_calls[0]['assistantBaseline']['lastHash'], 'baseline')
 
+    def test_collect_latest_story_supports_legacy_task_without_prep_state(self):
+        source = GPTDirectorSource(
+            token='token-legacy',
+            name='comic',
+            filename='legacy.pdf',
+            pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/p1', thumbnailUrl='/p1?t=1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.worker.collect_response = {
+            'ok': True,
+            'pending': False,
+            'repaired': True,
+            'result': make_result().model_dump(mode='json'),
+        }
+        value = self.service.collect_story(
+            task.id,
+            'https://chatgpt.com/g/test-manual-director',
+            use_latest=True,
+        )
+        self.assertFalse(value['pending'])
+        self.assertTrue(value['repaired'])
+        self.assertEqual(value['status'], 'COMPLETED')
+        self.assertEqual(self.store.load_task(task.id).status, 'COMPLETED')
+
     def test_collect_story_imports_and_completes_valid_result(self):
         source = GPTDirectorSource(
             token='token-3',
