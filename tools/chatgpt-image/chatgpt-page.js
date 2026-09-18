@@ -280,40 +280,52 @@ export function escapeBareQuotesInJsonStrings(text) {
   return result;
 }
 
-export function parseStoryJsonDetailed(text) {
+export function extractStoryJsonText(text) {
   const raw = String(text || "").trim();
-  const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const unfenced = raw.replace(/^\`\`\`(?:json)?\\s*/i, "").replace(/\\s*\`\`\`$/i, "").trim();
   const start = unfenced.indexOf("{");
   const end = unfenced.lastIndexOf("}");
   if (start < 0 || end <= start) {
     throw new ImageWorkerError("GPT response does not contain a JSON object", "DIRECTOR_INVALID_JSON");
   }
+  return unfenced.slice(start, end + 1);
+}
 
-  const candidate = unfenced.slice(start, end + 1);
+export function repairGptJsonText(text) {
+  const candidate = extractStoryJsonText(text);
+
   try {
-    return { value: JSON.parse(candidate), repaired: false, repairMethod: null };
+    JSON.parse(candidate);
+    return {
+      jsonText: candidate,
+      repaired: false,
+      repairMethod: null,
+    };
   } catch (parseError) {
     const quoteEscaped = escapeBareQuotesInJsonStrings(candidate);
     if (quoteEscaped !== candidate) {
       try {
+        JSON.parse(quoteEscaped);
         return {
-          value: JSON.parse(quoteEscaped),
+          jsonText: quoteEscaped,
           repaired: true,
           repairMethod: "local_quote_escape",
         };
       } catch {
-        // Continue into the broader local repair below. This keeps dialogue and
-        // prompt text intact while still allowing jsonrepair to fix commas,
-        // trailing tokens, unquoted keys, and other common LLM JSON mistakes.
+        // Keep the quote-escaped candidate and let jsonrepair handle the
+        // remaining common LLM JSON mistakes without asking GPT to rewrite it.
       }
     }
 
     try {
       const repairedText = jsonrepair(quoteEscaped);
+      JSON.parse(repairedText);
       return {
-        value: JSON.parse(repairedText),
+        jsonText: repairedText,
         repaired: true,
-        repairMethod: "local_jsonrepair",
+        repairMethod: quoteEscaped !== candidate
+          ? "local_quote_escape_then_jsonrepair"
+          : "local_jsonrepair",
       };
     } catch (repairError) {
       throw new ImageWorkerError(
@@ -325,6 +337,16 @@ export function parseStoryJsonDetailed(text) {
       );
     }
   }
+}
+
+export function parseStoryJsonDetailed(text) {
+  const repaired = repairGptJsonText(text);
+  return {
+    value: JSON.parse(repaired.jsonText),
+    jsonText: repaired.jsonText,
+    repaired: repaired.repaired,
+    repairMethod: repaired.repairMethod,
+  };
 }
 
 export function parseStoryJson(text) {
