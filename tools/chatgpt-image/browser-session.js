@@ -20,20 +20,29 @@ export class BrowserSession {
   async getContext() {
     if (this.context) return this.context;
     await fs.mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
-    try {
-      this.context = await chromium.launchPersistentContext(this.config.profileDir, {
-        channel: this.config.browserChannel,
-        headless: this.config.headless,
-        acceptDownloads: true,
-        viewport: { width: 1440, height: 1100 },
-      });
-      return this.context;
-    } catch (error) {
-      throw new ImageWorkerError(
-        `Could not start the dedicated ${this.config.browserChannel} browser. Set CWS_CHATGPT_IMAGE_CHANNEL=msedge if Chrome is unavailable.`,
-        "BROWSER_START_FAILED",
-      );
+    const channels = [...new Set([
+      this.config.browserChannel,
+      ...(process.platform === "win32" ? ["msedge", "chrome"] : ["chrome"]),
+    ])];
+    let lastError = null;
+    for (const channel of channels) {
+      try {
+        this.context = await chromium.launchPersistentContext(this.config.profileDir, {
+          channel,
+          headless: this.config.headless,
+          acceptDownloads: true,
+          viewport: { width: 1440, height: 1100 },
+        });
+        return this.context;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    throw new ImageWorkerError(
+      `Could not start a dedicated Chromium browser (${channels.join(", ")}). Set CWS_CHATGPT_IMAGE_CHANNEL to an installed Playwright channel.`,
+      "BROWSER_START_FAILED",
+      { cause: String(lastError?.message || lastError || "") },
+    );
   }
 
   async getPage(targetUrl) {
