@@ -331,6 +331,54 @@ export function parseStoryJson(text) {
   return parseStoryJsonDetailed(text).value;
 }
 
+export function normalizeStoryResultShape(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const story = value.creativeStory && typeof value.creativeStory === "object" && !Array.isArray(value.creativeStory)
+    ? value.creativeStory
+    : {};
+  const normalizedStory = {
+    title: String(story.title ?? "").trim(),
+    summary: String(story.summary ?? ""),
+    story: String(story.story ?? ""),
+    adaptationNotes: Array.isArray(story.adaptationNotes)
+      ? story.adaptationNotes.map((item) => String(item))
+      : story.adaptationNotes == null || story.adaptationNotes === ""
+        ? []
+        : [String(story.adaptationNotes)],
+  };
+
+  const normalizedShots = Array.isArray(value.shots)
+    ? value.shots.map((shot) => {
+      const item = shot && typeof shot === "object" && !Array.isArray(shot) ? shot : {};
+      return {
+        shotId: item.shotId,
+        title: String(item.title ?? ""),
+        duration: item.duration,
+        storyPurpose: String(item.storyPurpose ?? ""),
+        speaker: item.speaker == null ? null : String(item.speaker),
+        english: String(item.english ?? ""),
+        chinese: String(item.chinese ?? ""),
+        keyframeDescription: String(item.keyframeDescription ?? ""),
+        imagePrompt: String(item.imagePrompt ?? ""),
+        videoPrompt: String(item.videoPrompt ?? ""),
+        negativePrompt: String(item.negativePrompt ?? ""),
+        sourcePages: Array.isArray(item.sourcePages) ? item.sourcePages : [],
+      };
+    })
+    : value.shots;
+
+  return {
+    sourceUnderstanding: value.sourceUnderstanding && typeof value.sourceUnderstanding === "object" && !Array.isArray(value.sourceUnderstanding)
+      ? value.sourceUnderstanding
+      : {},
+    creativeStory: normalizedStory,
+    characterDefinitions: Array.isArray(value.characterDefinitions) ? value.characterDefinitions : [],
+    sceneDefinitions: Array.isArray(value.sceneDefinitions) ? value.sceneDefinitions : [],
+    shots: normalizedShots,
+  };
+}
+
 export function validateStoryResult(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ImageWorkerError("Production result must be a JSON object", "DIRECTOR_INVALID_PRODUCTION_JSON");
@@ -644,7 +692,7 @@ export class ChatGPTPage {
     let repairMethod = null;
     try {
       const parsed = parseStoryJsonDetailed(stable.text);
-      result = validateStoryResult(parsed.value);
+      result = validateStoryResult(normalizeStoryResultShape(parsed.value));
       repaired = parsed.repaired;
       repairMethod = parsed.repairMethod;
     } catch (error) {
@@ -665,7 +713,7 @@ export class ChatGPTPage {
       const repairedReply = await sendRepair(this.page, stable.text, error.message);
       try {
         const parsed = parseStoryJsonDetailed(repairedReply.text);
-        result = validateStoryResult(parsed.value);
+        result = validateStoryResult(normalizeStoryResultShape(parsed.value));
         repaired = true;
         repairMethod = parsed.repaired ? "gpt_then_local_jsonrepair" : "gpt";
       } catch (secondError) {
