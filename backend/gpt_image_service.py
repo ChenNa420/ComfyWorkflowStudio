@@ -298,16 +298,21 @@ class GPTImageService:
             raise GPTImageError('STORY_PREP_REQUIRED', 'Prepare the GPT story draft before collecting the result')
 
         target_url = str(gpt_url or prep.get('gptUrl') or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
+        assistant_baseline = {} if use_latest else (prep.get('assistantBaseline') or {})
         collected = self.worker.collect_story({
             'taskId': task_id,
             'gptUrl': target_url,
-            'assistantBaseline': prep.get('assistantBaseline') or {},
+            'assistantBaseline': assistant_baseline,
+            'useLatest': bool(use_latest),
         })
         if bool(collected.get('pending')):
             return {
                 'ok': True,
                 'pending': True,
                 'repaired': False,
+                'reason': collected.get('reason'),
+                'assistantCount': collected.get('assistantCount'),
+                'baselineCount': collected.get('baselineCount'),
                 'taskId': task_id,
                 'status': task.status,
             }
