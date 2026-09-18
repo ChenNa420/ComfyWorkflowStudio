@@ -27,17 +27,13 @@ Google may reject OAuth sign-in inside a browser launched directly by Playwright
 storage\chatgpt-image-browser\cdp-profile
 ```
 
-3. In the same PowerShell session used to start/test the worker, set:
-
-```powershell
-$env:CWS_CHATGPT_IMAGE_CDP_URL="http://127.0.0.1:9222"
-```
-
-4. Check readiness:
+3. Check readiness. ComfyWorkflowStudio now defaults to local CDP `http://127.0.0.1:9222`, so no environment variable is required:
 
 ```powershell
 node tools/chatgpt-image/worker.js check
 ```
+
+By default the CDP Chrome opens the project GPT `童语工坊 · AI动画编剧导演`. Override it only when needed with `CWS_CHATGPT_IMAGE_URL`.
 
 Expected result includes:
 
