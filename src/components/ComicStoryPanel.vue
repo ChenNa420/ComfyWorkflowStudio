@@ -95,6 +95,7 @@ type ImageFrameState = {
   url?:string
 }
 type ImageJobState = { jobId:string; status:string; errorCode?:string|null; errorMessage?:string|null }
+type DirectorAutoJob = { jobId:string; taskId:string; status:string; errorCode?:string|null; errorMessage?:string|null; result?:{title?:string;shotCount?:number;sourcePages?:number[]}|null }
 const imageEngine = ref({
   node:false, worker:false, dependencies:false, profileExists:false, readyForCheck:false,
   browserMode:'cdp', cdpUrl:'http://127.0.0.1:9222', gptUrl:DEFAULT_GPT_DIRECTOR_URL,
@@ -102,6 +103,8 @@ const imageEngine = ref({
 })
 const frameStateByShot = ref<Record<string,ImageFrameState>>({})
 const frameJobByShot = ref<Record<string,ImageJobState>>({})
+const directorAutoJob = ref<DirectorAutoJob|null>(null)
+const directorAutoStatus = ref({ready:false,relayReady:false,cdpReady:false,message:'尚未检测'})
 let lifecycle = new AbortController()
 
 const settings = ref({
@@ -346,6 +349,58 @@ function saveGptUrl(){
 
 function pageRef(page:number){return `P${String(page).padStart(3,'0')}`}
 
+async function loadDirectorAutoStatus(){
+  try{
+    const value=await getJson('/api/gpt-director-auto/status')
+    directorAutoStatus.value={...directorAutoStatus.value,...value,message:value.ready?'自动创作环境已就绪。':!value.relayReady?'WebMCP Relay 未连接。':!value.cdpReady?'ChatGPT 专用 Chrome 未连接。':'自动创作依赖未就绪。'}
+  }catch(value){
+    directorAutoStatus.value={...directorAutoStatus.value,ready:false,message:value instanceof Error?value.message:'自动创作状态读取失败'}
+  }
+}
+
+async function pollDirectorAutoJob(jobId:string){
+  for(let attempt=0;attempt<450;attempt++){
+    await sleep(2000)
+    const value=await getJson(`/api/gpt-director-auto/jobs/${encodeURIComponent(jobId)}`)
+    directorAutoJob.value=value
+    if(value.status==='COMPLETED'){
+      localStorage.removeItem('cws-gpt-director-auto-job-id')
+      if(value.taskId)await loadDirectorTask(value.taskId)
+      notice.value=`童语工坊 GPT 已完成自动创作：${value.result?.title||'故事已返回'} · ${value.result?.shotCount||gptResult.value?.shots.length||0} Shots。`
+      return
+    }
+    if(value.status==='FAILED'){
+      localStorage.removeItem('cws-gpt-director-auto-job-id')
+      throw new Error(value.errorMessage||value.errorCode||'GPT 自动创作失败')
+    }
+  }
+  throw new Error('GPT 自动创作等待超时，请稍后刷新页面查看任务状态。')
+}
+
+async function startDirectorAuto(){
+  if(!activeTask.value)throw new Error('请先创建 GPT Director Task。')
+  await loadDirectorAutoStatus()
+  if(!directorAutoStatus.value.ready){
+    throw new Error(directorAutoStatus.value.message||'自动创作环境尚未就绪。')
+  }
+  const job=await postJson(`/api/gpt-director-auto/tasks/${encodeURIComponent(activeTask.value.id)}/run`,{})
+  directorAutoJob.value=job
+  localStorage.setItem('cws-gpt-director-auto-job-id',job.jobId)
+  notice.value='已把全部选中漫画页交给童语工坊 GPT，正在理解画面并创作故事…'
+  await pollDirectorAutoJob(job.jobId)
+}
+
+async function createAndRunTask(){
+  error.value=''
+  try{
+    await createTask()
+    if(!activeTask.value)return
+    await startDirectorAuto()
+  }catch(value){
+    error.value=value instanceof Error?value.message:'GPT 自动创作失败'
+  }
+}
+
 async function createTask(){
   if(!selectedIssue.value){error.value='请先选择漫画。';return}
   if(!selectedPagesSorted.value.length){error.value='至少选择 1 个漫画页面。';return}
@@ -356,7 +411,7 @@ async function createTask(){
     })
     backendConnected.value=true;gptResult.value=null
     localStorage.setItem('cws-gpt-director-last-task-id',activeTask.value!.id)
-    notice.value='GPT Director Task 已持久化到后端。可以复制任务说明并打开童语工坊 GPT。'
+    notice.value='GPT Director Task 已持久化到后端。可以直接开始自动创作，或使用手动备用流程。'
     persistBridgeState()
   }catch(value){backendConnected.value=false;error.value=value instanceof Error?value.message:'创建任务失败'}finally{loading.value=''}
 }
@@ -489,6 +544,15 @@ async function restoreBridgeState(){
     sessionStorage.removeItem('cws-gpt-director-task');sessionStorage.removeItem('cws-gpt-director-result')
     const taskId=localStorage.getItem('cws-gpt-director-last-task-id')
     if(taskId)await loadDirectorTask(taskId)
+    const autoJobId=localStorage.getItem('cws-gpt-director-auto-job-id')
+    if(autoJobId){
+      try{
+        const job=await getJson(`/api/gpt-director-auto/jobs/${encodeURIComponent(autoJobId)}`)
+        directorAutoJob.value=job
+        if(['QUEUED','RUNNING'].includes(job.status))void pollDirectorAutoJob(autoJobId).catch(value=>{error.value=value instanceof Error?value.message:'GPT 自动创作恢复失败'})
+        else localStorage.removeItem('cws-gpt-director-auto-job-id')
+      }catch{localStorage.removeItem('cws-gpt-director-auto-job-id')}
+    }
   }catch{backendConnected.value=false}
 }
 
@@ -650,6 +714,7 @@ onMounted(async()=>{
   await restoreBridgeState()
   await registerWebMcp()
   await loadImageEngineStatus()
+  await loadDirectorAutoStatus()
 })
 const keyframeProbePrompt = computed(()=>{
   if(!activeTask.value)return ''
@@ -751,7 +816,7 @@ onUnmounted(()=>lifecycle.abort())
 
         <article class="panel task-card">
           <div class="section-title compact"><div><span class="step-number">3</span><div><h3>创建 GPT 编剧导演任务</h3><p>GPT 负责故事创作与关键帧提示词，工作台负责接收结构化结果。</p></div></div></div>
-          <button class="primary task-create" :disabled="!selectedPagesSorted.length" @click="createTask"><WandSparkles :size="17"/>{{activeTask?'重新创建 GPT Task':'创建 GPT 编剧导演 Task'}}</button>
+          <button class="primary task-create" :disabled="!selectedPagesSorted.length||['QUEUED','RUNNING'].includes(directorAutoJob?.status||'')" @click="createAndRunTask"><LoaderCircle v-if="['QUEUED','RUNNING'].includes(directorAutoJob?.status||'')" class="spin" :size="17"/><WandSparkles v-else :size="17"/>{{['QUEUED','RUNNING'].includes(directorAutoJob?.status||'')?'GPT 正在自动创作…':activeTask?'重新创建并开始 GPT 创作':'创建并开始 GPT 创作'}}</button>
 
           <div v-if="activeTask" class="task-summary">
             <div class="task-status"><CheckCircle2 :size="18"/><div><b>{{activeTask.status==='COMPLETED'?'结果已返回':'任务已创建'}}</b><small>{{activeTask.updatedAt.replace('T',' ').slice(0,19)}}</small></div></div>
@@ -759,13 +824,14 @@ onUnmounted(()=>lifecycle.abort())
           </div>
 
           <label class="gpt-url">童语工坊 GPT 页面地址<input v-model="gptUrl" placeholder="粘贴你的自定义 GPT 链接；留空则打开 ChatGPT 首页" @change="saveGptUrl"/></label>
-          <div class="task-actions"><button class="gpt-open" :disabled="!activeTask" @click="openGpt"><Sparkles :size="16"/>打开童语工坊 GPT<ExternalLink :size="15"/></button><button class="secondary" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="15"/>{{promptCopied?'已复制':'复制任务说明'}}</button></div>
-          <div :class="['mcp-state',{ok:webMcpRegistered}]"><div><component :is="webMcpRegistered?Wifi:WifiOff" :size="18"/><span><b>WebMCP {{webMcpRegistered?'可用':'不可用'}}</b><small>{{webMcpRegistered?'现有 3 个业务工具 + 2 个开发期 Probe':'复制任务说明到 GPT，完成后把 JSON 粘贴到下方即可。'}}</small></span></div><button class="ghost small" @click="registerWebMcp"><RefreshCw :size="14"/>重新检测</button></div>
+          <div v-if="directorAutoJob" class="task-summary"><div class="task-status"><LoaderCircle v-if="['QUEUED','RUNNING'].includes(directorAutoJob.status)" class="spin" :size="18"/><CheckCircle2 v-else-if="directorAutoJob.status==='COMPLETED'" :size="18"/><CircleAlert v-else :size="18"/><div><b>自动创作：{{directorAutoJob.status}}</b><small>{{directorAutoJob.status==='RUNNING'?'正在读取全部漫画页并等待 GPT 返回结构化故事…':directorAutoJob.errorMessage||directorAutoJob.result?.title||'等待执行'}}</small></div></div></div>
+          <div class="task-actions"><button class="secondary" :disabled="loading==='task'||['QUEUED','RUNNING'].includes(directorAutoJob?.status||'')" @click="createTask">仅创建 Task</button><button class="gpt-open" :disabled="!activeTask" @click="openGpt"><Sparkles :size="16"/>打开童语工坊 GPT<ExternalLink :size="15"/></button><button class="secondary" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="15"/>{{promptCopied?'已复制':'复制任务说明'}}</button></div>
+          <div :class="['mcp-state',{ok:webMcpRegistered}]"><div><component :is="webMcpRegistered?Wifi:WifiOff" :size="18"/><span><b>WebMCP {{webMcpRegistered?'可用':'不可用'}}</b><small>{{webMcpRegistered?'4 个业务工具 + 2 个开发期 Probe':'复制任务说明到 GPT，完成后把 JSON 粘贴到下方即可。'}}</small></span></div><button class="ghost small" @click="registerWebMcp"><RefreshCw :size="14"/>重新检测</button></div>
           <p v-if="webMcpError" class="mcp-help">{{webMcpError}}</p>
           <dl class="runtime-diagnostics">
             <div><dt>WebMCP</dt><dd>{{webMcpAvailable?'Available':'Unavailable'}}</dd></div>
             <div><dt>document.modelContext</dt><dd>{{webMcpAvailable?'Detected':'Missing'}}</dd></div>
-            <div><dt>Tools</dt><dd>{{registeredToolCount}}/5 Registered</dd></div>
+            <div><dt>Tools</dt><dd>{{registeredToolCount}}/6 Registered</dd></div>
             <div><dt>Backend</dt><dd>{{backendConnected?'Connected':'Failed'}}</dd></div>
             <div><dt>Current Task</dt><dd>{{activeTask?.id||'—'}}</dd></div>
             <div><dt>Last Tool Call</dt><dd>{{lastToolCall?`${lastToolCall.tool} · ${lastToolCall.success?'success':'failed'} · ${lastToolCall.timestamp.slice(11,19)} · ${lastToolCall.message}`:'—'}}</dd></div>
