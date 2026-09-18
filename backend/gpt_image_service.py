@@ -21,6 +21,8 @@ from backend.gpt_director import GPTDirectorResult, GPTDirectorShot, GPTDirector
 JOB_ID_RE = re.compile(r'^gij-[a-f0-9]{32}$')
 MIME_BY_FORMAT = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp'}
 EXT_BY_MIME = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}
+DEFAULT_CHATGPT_IMAGE_CDP_URL = 'http://127.0.0.1:9222'
+DEFAULT_CHATGPT_IMAGE_GPT_URL = 'https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
 
 
 def _now() -> str:
@@ -40,6 +42,8 @@ class NodeImageWorker:
         self.tool_dir = self.tool.parent
         self.profile_dir = self.root / 'storage' / 'chatgpt-image-browser' / 'profile'
         self.output_dir = self.root / 'storage' / 'chatgpt-image-worker'
+        self.cdp_url = os.getenv('CWS_CHATGPT_IMAGE_CDP_URL', DEFAULT_CHATGPT_IMAGE_CDP_URL).strip()
+        self.gpt_url = os.getenv('CWS_CHATGPT_IMAGE_URL', DEFAULT_CHATGPT_IMAGE_GPT_URL).strip()
 
     def _node(self) -> str:
         node = shutil.which('node')
@@ -55,6 +59,8 @@ class NodeImageWorker:
         env = os.environ.copy()
         env.setdefault('CWS_CHATGPT_IMAGE_PROFILE_DIR', str(self.profile_dir))
         env.setdefault('CWS_CHATGPT_IMAGE_OUTPUT_DIR', str(self.output_dir))
+        env['CWS_CHATGPT_IMAGE_CDP_URL'] = self.cdp_url
+        env['CWS_CHATGPT_IMAGE_URL'] = self.gpt_url
         return env
 
     def installation_status(self) -> dict[str, Any]:
@@ -66,6 +72,9 @@ class NodeImageWorker:
             'dependencies': installed,
             'profileExists': self.profile_dir.is_dir(),
             'readyForCheck': bool(node and self.tool.is_file() and installed),
+            'browserMode': 'cdp' if self.cdp_url else 'dedicated_profile',
+            'cdpUrl': self.cdp_url,
+            'gptUrl': self.gpt_url,
         }
 
     def _run(self, command: str, payload: dict | None = None, timeout: int = 300) -> dict:
@@ -102,15 +111,37 @@ class NodeImageWorker:
         return self._run('generate', payload, timeout=660)
 
     def start_login(self) -> dict:
-        node = self._node()
+        self._node()
+        env = self._env()
         flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
+        if os.name == 'nt':
+            launcher = self.tool_dir / 'start-cdp-chrome.cmd'
+            if launcher.is_file():
+                subprocess.Popen(
+                    ['cmd.exe', '/c', str(launcher)],
+                    cwd=self.root,
+                    env=env,
+                    creationflags=flags,
+                )
+                return {
+                    'started': True,
+                    'browserMode': 'cdp',
+                    'cdpUrl': self.cdp_url,
+                    'gptUrl': self.gpt_url,
+                    'message': 'Dedicated normal Chrome started. Sign in to ChatGPT and keep the window open.',
+                }
         subprocess.Popen(
-            [node, str(self.tool), 'login'],
+            [shutil.which('node') or 'node', str(self.tool), 'login'],
             cwd=self.root,
-            env=self._env(),
+            env=env,
             creationflags=flags,
         )
-        return {'started': True, 'message': 'Dedicated ChatGPT login browser started'}
+        return {
+            'started': True,
+            'browserMode': 'dedicated_profile',
+            'gptUrl': self.gpt_url,
+            'message': 'Dedicated ChatGPT login browser started',
+        }
 
 
 class ImmediateExecutor:
