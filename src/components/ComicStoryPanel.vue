@@ -547,7 +547,11 @@ async function sourcePageImageResult(taskId:string,page:number,visualValidation=
   if(!/^gdt-[a-f0-9]{32}$/.test(taskId))throw new Error('Invalid GPT Director task')
   if(!Number.isInteger(page)||page<1)throw new Error('Invalid source page')
   const response=await fetch(`/api/comic-story/gpt-director/tasks/${encodeURIComponent(taskId)}/pages/${page}/image`,{credentials:'same-origin'})
-  if(!response.ok)throw new Error(`Source page request failed (${response.status})`)
+  if(!response.ok){
+    const payload=await response.json().catch(()=>({}))
+    const detail=typeof payload?.detail==='string'?payload.detail:payload?.detail?.message||payload?.detail?.code||''
+    throw new Error(`Source page request failed (${response.status})${detail?`: ${detail}`:''}`)
+  }
   const mime=(response.headers.get('content-type')||'').split(';',1)[0].toLowerCase()
   if(!['image/jpeg','image/png','image/webp'].includes(mime))throw new Error('Unsupported source image MIME')
   const bytes=await response.arrayBuffer()
