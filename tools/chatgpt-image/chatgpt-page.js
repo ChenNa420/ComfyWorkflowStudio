@@ -52,6 +52,40 @@ export function diffCandidates(beforeKeys, candidates) {
   });
 }
 
+export function sessionPayloadAuthenticated(value) {
+  if (!value || typeof value !== "object") return false;
+  const user = value.user && typeof value.user === "object" ? value.user : null;
+  return Boolean(
+    user && (user.id || user.email || user.name)
+    || value.accessToken
+    || value.expires
+    || value.authenticated === true
+  );
+}
+
+async function sessionAuthenticationState(page) {
+  try {
+    const value = await page.evaluate(async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Accept": "application/json" },
+        });
+        if (!response.ok) return { known: false, status: response.status };
+        const payload = await response.json();
+        return { known: true, payload };
+      } catch {
+        return { known: false };
+      }
+    });
+    if (!value?.known) return null;
+    return sessionPayloadAuthenticated(value.payload);
+  } catch {
+    return null;
+  }
+}
+
 async function listImageCandidates(page) {
   const rows = await page.locator(IMAGE_SELECTOR).evaluateAll((images) =>
     images.map((image) => {
@@ -91,21 +125,37 @@ async function hasVisibleLoggedOutMarker(page) {
 
 async function assertAuthenticated(page, timeoutMs = 20000) {
   await findPromptBox(page, timeoutMs);
-  if (await hasVisibleLoggedOutMarker(page)) {
+  const sessionState = await sessionAuthenticationState(page);
+  if (sessionState === true) {
+    return { ok: true, ready: true, authenticated: true, authCheck: "session", url: page.url() };
+  }
+  if (sessionState === false) {
     throw new ImageWorkerError(
-      "ChatGPT is open but this dedicated browser profile is not signed in. Run the login command and complete sign-in in that window.",
+      "ChatGPT session endpoint reports that the dedicated browser profile is not signed in.",
       "CHATGPT_LOGIN_REQUIRED",
     );
   }
-  return { ok: true, ready: true, authenticated: true, url: page.url() };
+  if (await hasVisibleLoggedOutMarker(page)) {
+    throw new ImageWorkerError(
+      "ChatGPT appears signed out in the dedicated browser profile.",
+      "CHATGPT_LOGIN_REQUIRED",
+    );
+  }
+  return { ok: true, ready: true, authenticated: true, authCheck: "composer-fallback", url: page.url() };
 }
 
 async function waitUntilAuthenticated(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const promptVisible = await page.locator(SELECTORS.prompt).first().isVisible().catch(() => false);
-    if (promptVisible && !(await hasVisibleLoggedOutMarker(page))) {
-      return { ok: true, ready: true, authenticated: true, url: page.url() };
+    if (promptVisible) {
+      const sessionState = await sessionAuthenticationState(page);
+      if (sessionState === true) {
+        return { ok: true, ready: true, authenticated: true, authCheck: "session", url: page.url() };
+      }
+      if (sessionState === null && !(await hasVisibleLoggedOutMarker(page))) {
+        return { ok: true, ready: true, authenticated: true, authCheck: "composer-fallback", url: page.url() };
+      }
     }
     await page.waitForTimeout(1000);
   }
