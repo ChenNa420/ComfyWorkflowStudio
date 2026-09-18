@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
-import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, isNewAssistantResponse, jsonRepairPrompt } from '../gpt-director-runner.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt, completeJsonResponse, parseableJsonResponse, validateProductionResult, isNewAssistantResponse, jsonRepairPrompt } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -92,10 +92,46 @@ test('recycled assistant node counts as a new response when text changes', () =>
   assert.equal(isNewAssistantResponse(2, 'another answer', baseline), true)
 })
 
-test('json repair prompt preserves content and demands escaped quotes', () => {
-  const prompt = jsonRepairPrompt('Unexpected token')
+test('parseableJsonResponse accepts any complete JSON object without implying production validity', () => {
+  assert.equal(parseableJsonResponse('{"error":"repair unavailable"}'), true)
+  assert.equal(parseableJsonResponse('{"creativeStory":'), false)
+})
+
+test('production validator rejects error objects and incomplete payloads', () => {
+  assert.throws(() => validateProductionResult({ error: 'repair unavailable' }), /error object/)
+  assert.throws(() => validateProductionResult({
+    sourceUnderstanding: {},
+    creativeStory: { title: 'Demo' },
+    characterDefinitions: [],
+    sceneDefinitions: [],
+    shots: [],
+  }), /1-24/)
+})
+
+test('production validator accepts required production structure', () => {
+  const value = {
+    sourceUnderstanding: { summary: 'ok' },
+    creativeStory: { title: 'Demo' },
+    characterDefinitions: [],
+    sceneDefinitions: [],
+    shots: [{
+      shotId: 'S01',
+      imagePrompt: 'frame',
+      videoPrompt: 'motion',
+      sourcePages: [4],
+    }],
+  }
+  assert.equal(validateProductionResult(value), value)
+})
+
+test('json repair prompt preserves content, demands escaped quotes, and carries original reply', () => {
+  const original = '{"english":"Bobo, "wait!""}'
+  const prompt = jsonRepairPrompt('Unexpected token', original)
   assert.match(prompt, /保持故事、角色、场景、镜头数量、对白/)
   assert.match(prompt, /只修复 JSON 语法/)
   assert.match(prompt, /\\\"/)
   assert.match(prompt, /Unexpected token/)
+  assert.match(prompt, /待修复的上一版完整原文开始/)
+  assert.match(prompt, /Bobo/)
+  assert.match(prompt, /待修复的上一版完整原文结束/)
 })
