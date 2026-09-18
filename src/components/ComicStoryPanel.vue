@@ -120,12 +120,6 @@ const settings = ref({
 })
 
 const workflowStep = computed(()=>gptResult.value?4:activeTask.value?3:selectedIssue.value?2:1)
-const webMcpRuntimeLabel = computed(()=>{
-  if(webMcpRuntime.value.mode==='native')return '浏览器原生 WebMCP + MCP-B Bridge'
-  if(webMcpRuntime.value.mode==='mcp-b-polyfill')return 'MCP-B Polyfill'
-  return 'WebMCP Runtime 不可用'
-})
-const webMcpRelayLabel = computed(()=>webMcpRuntime.value.relayEmbedLoaded?'Relay Embed 已加载 · 127.0.0.1:9333':'Relay 未加载')
 const previewUrl = computed(()=>selectedIssue.value ? `/api/comic-story/page/${selectedIssue.value.token}/${currentPage.value}` : '')
 const selectedPagesSorted = computed(()=>[...selectedPages.value].sort((a,b)=>a-b))
 const selectedPagesText = computed(()=>selectedPagesSorted.value.join(', ') || '尚未选择')
@@ -674,7 +668,7 @@ onUnmounted(()=>lifecycle.abort())
   <div class="director-shell">
     <section class="director-hero panel">
       <div>
-        <span class="eyebrow">COMIC STORY · GPT DIRECTOR BRIDGE</span>
+        <span class="eyebrow">COMIC STORY · GPT DIRECTOR MANUAL</span>
         <h2>漫画拆故事 · GPT 编剧导演</h2>
         <p>选择 1–12 个 PDF/漫画页面，创建手动 GPT Task。你在“童语工坊 · AI动画编剧导演”中上传所选页面并粘贴任务说明，GPT 返回故事 JSON 后再粘贴回工作台校验导入。</p>
       </div>
@@ -841,7 +835,7 @@ onUnmounted(()=>lifecycle.abort())
         </template>
 
         <template v-else>
-          <div class="waiting-flow"><div class="done"><span>✓</span><b>任务已创建</b><small>{{activeTask?'可打开 GPT':'先创建 Task'}}</small></div><i></i><div :class="{active:!!activeTask}"><span>2</span><b>GPT 处理中</b><small>拆故事 / 重写 / 分镜</small></div><i></i><div><span>3</span><b>接收结果</b><small>WebMCP 自动回填</small></div><i></i><div><span>4</span><b>完成</b><small>进入动画生产</small></div></div>
+          <div class="waiting-flow"><div class="done"><span>✓</span><b>Task 已创建</b><small>{{activeTask?'准备源页与提示词':'先创建 Task'}}</small></div><i></i><div :class="{active:!!activeTask}"><span>2</span><b>手动交给 GPT</b><small>上传源页 + 粘贴任务说明</small></div><i></i><div><span>3</span><b>复制 JSON</b><small>取得 GPT 完整结构化结果</small></div><i></i><div><span>4</span><b>导入工作台</b><small>校验后进入动画生产</small></div></div>
           <details class="manual-import" open><summary>粘贴 GPT 返回的完整 JSON</summary><p>工作台会检查故事标题、镜头 ID、时长、Prompt 与 sourcePages；校验通过后自动持久化并完成 Task。</p><textarea v-model="manualJson" rows="10" placeholder='{"sourceUnderstanding":{},"creativeStory":{"title":"..."},"characterDefinitions":[],"sceneDefinitions":[],"shots":[...]}'></textarea><button class="primary" :disabled="!activeTask||!manualJson.trim()" @click="importManualResult"><Braces :size="15"/>校验并导入故事 JSON</button></details>
         </template>
       </section>
