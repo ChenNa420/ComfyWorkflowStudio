@@ -86,6 +86,8 @@ class NodeImageWorker:
                 [node, str(self.tool), command],
                 input=json.dumps(payload or {}, ensure_ascii=False) if payload is not None else None,
                 text=True,
+                encoding='utf-8',
+                errors='strict',
                 capture_output=True,
                 cwd=self.root,
                 env=self._env(),
