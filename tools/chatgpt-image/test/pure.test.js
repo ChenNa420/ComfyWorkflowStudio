@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates, sessionPayloadAuthenticated } from "../chatgpt-page.js";
+import { candidateKey, diffCandidates, parseStoryJson, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -64,6 +64,23 @@ test("maps supported image MIME extensions", () => {
   assert.equal(extensionForMime("image/jpeg"), "jpg");
   assert.equal(extensionForMime("image/webp"), "webp");
   assert.equal(extensionForMime("image/png"), "png");
+});
+
+test("parses fenced story JSON and validates production shape", () => {
+  const value = parseStoryJson(`\`\`\`json
+{"sourceUnderstanding":{},"creativeStory":{"title":"Demo"},"characterDefinitions":[],"sceneDefinitions":[],"shots":[{"shotId":"S01","imagePrompt":"frame","videoPrompt":"motion","sourcePages":[1]}]}
+\`\`\``);
+  assert.equal(validateStoryResult(value), value);
+});
+
+test("story parser rejects malformed JSON and repair prompt carries original text", () => {
+  const malformed = '{"creativeStory":{"title":"Demo"},"shots":[{"shotId":"S01","english":"Bobo, "wait!""}]}';
+  assert.throws(() => parseStoryJson(malformed), /invalid JSON/);
+  const prompt = storyRepairPrompt("Unexpected token", malformed);
+  assert.match(prompt, /只修复 JSON 语法/);
+  assert.match(prompt, /待修复原文开始/);
+  assert.match(prompt, /Bobo/);
+  assert.match(prompt, /\\\"wait!/);
 });
 
 
