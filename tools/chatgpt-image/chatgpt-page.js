@@ -208,6 +208,73 @@ async function isGenerating(page) {
   return false;
 }
 
+export function escapeBareQuotesInJsonStrings(text) {
+  const source = String(text || "");
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  const isWhitespace = (value) => /\s/.test(value || "");
+  const commaLooksStructural = (index) => {
+    let cursor = index + 1;
+    while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
+    const next = source[cursor];
+    if (next === undefined) return true;
+    return next === '"'
+      || next === "{"
+      || next === "["
+      || next === "]"
+      || next === "}"
+      || next === "-"
+      || /[0-9tfn]/i.test(next);
+  };
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (!inString) {
+      result += char;
+      if (char === '"') inString = true;
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char !== '"') {
+      result += char;
+      continue;
+    }
+
+    let cursor = index + 1;
+    while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
+    const next = source[cursor];
+    const closesString = next === undefined
+      || next === ":"
+      || next === "}"
+      || next === "]"
+      || (next === "," && commaLooksStructural(cursor));
+
+    if (closesString) {
+      result += char;
+      inString = false;
+    } else {
+      result += '\\"';
+    }
+  }
+
+  return result;
+}
+
 export function parseStoryJsonDetailed(text) {
   const raw = String(text || "").trim();
   const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -221,8 +288,23 @@ export function parseStoryJsonDetailed(text) {
   try {
     return { value: JSON.parse(candidate), repaired: false, repairMethod: null };
   } catch (parseError) {
+    const quoteEscaped = escapeBareQuotesInJsonStrings(candidate);
+    if (quoteEscaped !== candidate) {
+      try {
+        return {
+          value: JSON.parse(quoteEscaped),
+          repaired: true,
+          repairMethod: "local_quote_escape",
+        };
+      } catch {
+        // Continue into the broader local repair below. This keeps dialogue and
+        // prompt text intact while still allowing jsonrepair to fix commas,
+        // trailing tokens, unquoted keys, and other common LLM JSON mistakes.
+      }
+    }
+
     try {
-      const repairedText = jsonrepair(candidate);
+      const repairedText = jsonrepair(quoteEscaped);
       return {
         value: JSON.parse(repairedText),
         repaired: true,
