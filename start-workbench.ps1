@@ -74,6 +74,12 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     Write-Host '[FAIL] npm was not found in PATH.' -ForegroundColor Red
     exit 1
 }
+
+$nodeMajor = 0
+try {
+    $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]") | Select-Object -First 1)
+} catch {}
+
 if (-not (Test-Path (Join-Path $Root 'node_modules'))) {
     Write-Host '[FAIL] root node_modules is missing. Run npm ci first.' -ForegroundColor Red
     exit 1
@@ -108,6 +114,24 @@ if ($webOwner) {
 } else {
     $webCommand = "npm run dev -- --host 127.0.0.1 --port $WebPort"
     Start-Process powershell.exe -WorkingDirectory $Root -ArgumentList '-NoExit','-NoProfile','-Command',$webCommand
+}
+
+$relayOwner = Get-PortOwner $RelayPort
+$relayStartedByLauncher = $false
+if (-not $relayOwner -and $nodeMajor -ge 22) {
+    $relayScript = Join-Path $Root 'tools\webmcp\start-local-relay.cmd'
+    if (Test-Path $relayScript) {
+        Write-Host "[INFO] Starting persistent local WebMCP Relay on port $RelayPort..." -ForegroundColor Cyan
+        Start-Process cmd.exe -WorkingDirectory $Root -ArgumentList '/k', ('"' + $relayScript + '"')
+        $relayStartedByLauncher = $true
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 500
+            $relayOwner = Get-PortOwner $RelayPort
+        } while (-not $relayOwner -and (Get-Date) -lt $deadline)
+    }
+} elseif (-not $relayOwner -and $nodeMajor -lt 22) {
+    Write-Host "[WARN] WebMCP Relay requires Node.js 22+; current Node major: $nodeMajor" -ForegroundColor Yellow
 }
 
 $apiReady = Wait-Http "$ApiUrl/api/health" 60
