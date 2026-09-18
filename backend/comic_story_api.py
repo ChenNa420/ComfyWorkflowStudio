@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from backend.db import ROOT
 from backend.ai.providers import get_comic_ai_provider
 from backend.ai.service import ComicAiError, ComicAiService
+from backend.ai.models import Episode
+from backend.ai.production_handoff import ProductionPlan, build_production_plan
 
 SUPPORTED_FILES = {'.pdf', '.cbz', '.zip', '.png', '.jpg', '.jpeg', '.webp'}
 IMAGE_FILES = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -57,6 +59,15 @@ class ComicAdaptRequest(BaseModel):
 class ComicEpisodeRequest(BaseModel):
     adaptedStory: dict
     settings: dict = Field(default_factory=dict)
+
+
+class ComicProductionRequest(BaseModel):
+    episode: dict
+
+
+class ComicFirstFrameRequest(BaseModel):
+    productionPlan: dict
+    shotId: int | str
 
 
 class ComicDraftRequest(BaseModel):
@@ -388,6 +399,20 @@ def comic_story_router() -> APIRouter:
             return {'episode': _service().episode(payload.adaptedStory, payload.settings)}
         except ComicAiError as exc:
             _ai_error(exc)
+
+    @router.post('/production-plan')
+    def production_plan(payload: ComicProductionRequest):
+        try:
+            Episode.model_validate(payload.episode)
+            return {'productionPlan': build_production_plan(payload.episode)}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={'code': 'PRODUCTION_PLAN_INVALID', 'message': str(exc)}) from exc
+
+    @router.post('/generate-first-frame')
+    def generate_first_frame(payload: ComicFirstFrameRequest):
+        ProductionPlan.model_validate(payload.productionPlan)
+        raise HTTPException(status_code=501, detail={'code': 'FIRST_FRAME_EXECUTION_NOT_ENABLED',
+                                                     'message': 'Production handoff is ready; ComfyUI execution is not enabled in Phase 1H-5.'})
 
     @router.post('/draft')
     def generate_draft(payload: ComicDraftRequest):
