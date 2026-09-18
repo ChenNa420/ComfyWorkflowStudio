@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 import { BrowserSession } from '../chatgpt-image/browser-session.js'
-import { ChatGPTPage, SELECTORS } from '../chatgpt-image/chatgpt-page.js'
+import { SELECTORS } from '../chatgpt-image/chatgpt-page.js'
 import { loadConfig } from '../chatgpt-image/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
