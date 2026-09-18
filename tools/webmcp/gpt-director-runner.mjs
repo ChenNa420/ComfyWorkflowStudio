@@ -264,7 +264,8 @@ async function runChatGPT(task, files, timeoutMs) {
   const session = new BrowserSession(config)
   try {
     const page = await session.getPage(config.chatgptUrl)
-    await new ChatGPTPage(page, config).assertReady(20000)
+    // Do not gate the production flow on a separate login precheck.
+    // The real composer/file-upload path below is the authoritative runtime check.
     await uploadFiles(page, files.map((item) => item.filePath))
     const responseText = await sendPrompt(page, composeDirectorPrompt(task), timeoutMs)
     return { result: parseJsonObject(responseText), gptUrl: page.url() }
