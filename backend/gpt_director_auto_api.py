@@ -9,6 +9,7 @@ from backend.gpt_director_auto import GPTDirectorAutoError, GPTDirectorAutoServi
 def gpt_director_auto_router() -> APIRouter:
     router = APIRouter(prefix='/api/gpt-director-auto', tags=['gpt-director-auto'])
     service = GPTDirectorAutoService(ROOT)
+    service.recover_interrupted_jobs()
 
     def fail(exc: GPTDirectorAutoError):
         status = (
