@@ -14,11 +14,36 @@ function isChatGPTPage(page) {
 export class BrowserSession {
   constructor(config) {
     this.config = config;
+    this.browser = null;
     this.context = null;
+    this.ownsContext = false;
+  }
+
+  get mode() {
+    return this.config.cdpUrl ? "cdp" : "dedicated_profile";
   }
 
   async getContext() {
     if (this.context) return this.context;
+
+    if (this.config.cdpUrl) {
+      try {
+        this.browser = await chromium.connectOverCDP(this.config.cdpUrl);
+        this.context = this.browser.contexts()[0];
+        if (!this.context) {
+          throw new ImageWorkerError("Chrome CDP endpoint has no browser context", "CDP_CONTEXT_MISSING");
+        }
+        return this.context;
+      } catch (error) {
+        if (error instanceof ImageWorkerError) throw error;
+        throw new ImageWorkerError(
+          "Could not connect to the dedicated Chrome CDP endpoint. Start tools/chatgpt-image/start-cdp-chrome.cmd first.",
+          "CDP_CONNECT_FAILED",
+          { cause: String(error?.message || error || "") },
+        );
+      }
+    }
+
     await fs.mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
     const channels = [...new Set([
       this.config.browserChannel,
@@ -33,6 +58,7 @@ export class BrowserSession {
           acceptDownloads: true,
           viewport: { width: 1440, height: 1100 },
         });
+        this.ownsContext = true;
         return this.context;
       } catch (error) {
         lastError = error;
@@ -60,7 +86,10 @@ export class BrowserSession {
   }
 
   async close() {
-    if (this.context) await this.context.close().catch(() => {});
+    if (this.ownsContext && this.context) await this.context.close().catch(() => {});
+    // CDP mode attaches to a browser owned by the operator; never close that browser here.
     this.context = null;
+    this.browser = null;
+    this.ownsContext = false;
   }
 }
