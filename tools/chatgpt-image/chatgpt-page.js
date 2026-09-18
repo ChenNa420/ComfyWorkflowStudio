@@ -649,6 +649,19 @@ export class ChatGPTPage {
       repairMethod = parsed.repairMethod;
     } catch (error) {
       if (!(error instanceof ImageWorkerError) || error.code !== "DIRECTOR_INVALID_JSON") throw error;
+
+      // A manual "force fetch latest" must be read-only: never send another
+      // message to ChatGPT while the operator is trying to pull an existing
+      // completed reply back into the Studio. Return the local parse/repair
+      // failure immediately so it is visible instead of appearing to hang for
+      // up to three minutes inside GPT repair.
+      if (useLatest) {
+        throw new ImageWorkerError(
+          "Latest GPT reply could not be parsed after local JSON repair: " + error.message,
+          "DIRECTOR_LOCAL_JSON_REPAIR_FAILED",
+        );
+      }
+
       const repairedReply = await sendRepair(this.page, stable.text, error.message);
       try {
         const parsed = parseStoryJsonDetailed(repairedReply.text);
