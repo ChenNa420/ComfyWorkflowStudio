@@ -129,3 +129,48 @@ tools\webmcp\test-relay.cmd gdt-0123456789abcdef0123456789abcdef 4
 ```
 
 The page number must be in that task's `selectedPages`; otherwise the Studio API will correctly reject it.
+
+
+## Real GPT visual validation
+
+After the relay smoke test has passed, verify that the actual selected comic page reaches the configured ChatGPT custom GPT and is visually understood.
+
+Requirements:
+
+- `start-workbench.cmd` is running
+- Comic Story page is open and shows `WebMCP 已就绪 · 6/6`
+- WebMCP Relay is connected on `127.0.0.1:9333`
+- the dedicated ChatGPT CDP Chrome is running on `127.0.0.1:9222`
+- that Chrome is signed in to ChatGPT
+
+Run:
+
+```bat
+tools\webmcp\test-gpt-vision.cmd gdt-0123456789abcdef0123456789abcdef 7
+```
+
+The page must belong to that task's `selectedPages`.
+
+The probe performs this real chain:
+
+```text
+MCP Client
+→ WebMCP Relay
+→ get_comic_story_task
+→ get_comic_story_page
+→ MCP ImageContent
+→ temporary local image
+→ dedicated Chrome CDP
+→ 童语工坊 · AI动画编剧导演
+→ visual JSON response
+```
+
+It removes the temporary uploaded image after the run and stores only the textual visual evidence at:
+
+```text
+storage/gpt-director/<taskId>/visual-probe.json
+```
+
+No source image base64 is persisted in Task/Result/localStorage/UI.
+
+This probe is intentionally descriptive. Human comparison with the actual comic page is the final acceptance step for `GPT Visual Access = PASS`.
