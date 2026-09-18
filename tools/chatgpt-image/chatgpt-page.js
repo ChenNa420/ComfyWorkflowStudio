@@ -501,44 +501,58 @@ async function composerScope(page) {
   return page.locator("form").last();
 }
 
+const ATTACHMENT_EVIDENCE_SELECTOR = [
+  "[data-testid*='attachment']",
+  "[data-testid*='file']",
+  "button[aria-label*='Remove attachment']",
+  "button[aria-label*='remove attachment']",
+  "button[aria-label*='Remove file']",
+  "button[aria-label*='remove file']",
+  "button[aria-label*='Remove image']",
+  "button[aria-label*='remove image']",
+  "button[aria-label*='移除附件']",
+  "button[aria-label*='删除附件']",
+  "button[aria-label*='删除文件']",
+  "button[aria-label*='移除图片']",
+  "img[src^='blob:']",
+  "img[src*='files.oaiusercontent']",
+].join(", ");
+
 async function attachmentEvidence(page, filePaths) {
   const scope = await composerScope(page);
   const names = filePaths.map((filePath) => path.basename(filePath).toLowerCase());
-  const text = (await scope.innerText().catch(() => "")).toLowerCase();
-  const matchedNames = names.filter((name) => text.includes(name)).length;
-  const visualCount = await scope.locator([
-    "[data-testid*='attachment']",
-    "[data-testid*='file']",
-    "button[aria-label*='Remove attachment']",
-    "button[aria-label*='remove attachment']",
-    "button[aria-label*='Remove file']",
-    "button[aria-label*='remove file']",
-    "button[aria-label*='Remove image']",
-    "button[aria-label*='remove image']",
-    "button[aria-label*='移除附件']",
-    "button[aria-label*='删除附件']",
-    "button[aria-label*='删除文件']",
-    "button[aria-label*='移除图片']",
-    "img[src^='blob:']",
-    "img[src*='files.oaiusercontent']",
-  ].join(", ")).count().catch(() => 0);
+  const scopeText = (await scope.innerText().catch(() => "")).toLowerCase();
+  const pageText = (await page.locator("body").innerText().catch(() => "")).toLowerCase();
+  const matchedNames = names.filter((name) => scopeText.includes(name)).length;
+  const pageMatchedNames = names.filter((name) => pageText.includes(name)).length;
+  const visualCount = await scope.locator(ATTACHMENT_EVIDENCE_SELECTOR).count().catch(() => 0);
+  const pageVisualCount = await page.locator(ATTACHMENT_EVIDENCE_SELECTOR).count().catch(() => 0);
   const imageCount = await scope.locator("img").count().catch(() => 0);
-  return { matchedNames, visualCount, imageCount };
+  const pageImageCount = await page.locator("img").count().catch(() => 0);
+  return { matchedNames, pageMatchedNames, visualCount, pageVisualCount, imageCount, pageImageCount };
 }
 
-async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 9000) {
+function attachmentEvidenceCount(evidence, baseline, expected) {
+  const scopeImageDelta = Math.max(0, evidence.imageCount - Number(baseline?.imageCount || 0));
+  const pageImageDelta = Math.max(0, evidence.pageImageCount - Number(baseline?.pageImageCount || 0));
+  const scopeVisualDelta = Math.max(0, evidence.visualCount - Number(baseline?.visualCount || 0));
+  const pageVisualDelta = Math.max(0, evidence.pageVisualCount - Number(baseline?.pageVisualCount || 0));
+  return Math.max(
+    evidence.matchedNames,
+    evidence.pageMatchedNames,
+    scopeImageDelta,
+    pageImageDelta,
+    scopeVisualDelta,
+    pageVisualDelta,
+  );
+}
+
+async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const evidence = await attachmentEvidence(page, filePaths);
-    const imageDelta = Math.max(0, evidence.imageCount - Number(baseline?.imageCount || 0));
-    const visualDelta = Math.max(0, evidence.visualCount - Number(baseline?.visualCount || 0));
-    if (
-      evidence.matchedNames >= filePaths.length
-      || visualDelta >= filePaths.length
-      || imageDelta >= filePaths.length
-    ) {
-      return Math.max(evidence.matchedNames, visualDelta, imageDelta);
-    }
+    const count = attachmentEvidenceCount(evidence, baseline, filePaths.length);
+    if (count >= filePaths.length) return count;
     await page.waitForTimeout(350);
   }
   return 0;
@@ -557,9 +571,14 @@ async function chooseComposerFileInput(page) {
 async function uploadViaComposerInput(page, filePaths, baseline) {
   const input = await chooseComposerFileInput(page);
   if (!input) return 0;
-  await input.setInputFiles(filePaths);
-  const assigned = await input.evaluate((element) => element.files?.length || 0).catch(() => 0);
-  if (assigned < filePaths.length) return 0;
+  try {
+    // ChatGPT may clear the native file input immediately after handling the
+    // change event, so input.files.length is not a reliable success signal.
+    // Set the files, then verify the visible attachment UI instead.
+    await input.setInputFiles(filePaths);
+  } catch {
+    return 0;
+  }
   return waitForAttachmentEvidence(page, filePaths, baseline);
 }
 
@@ -583,7 +602,7 @@ async function uploadViaFileChooser(page, filePaths, baseline) {
   if (!chooser) {
     await page.waitForTimeout(300);
     const menuItem = page.getByText(
-      /Add photos|Add files|Upload files|Attach files|上传文件|上传照片|添加照片|添加文件|照片和文件/i,
+      /Add photos|Add files|Upload files|Upload from computer|Attach files|上传文件|上传照片|添加照片|添加文件|照片和文件|从计算机上传|从电脑上传/i,
     ).last();
     if (await menuItem.count() && await menuItem.isVisible().catch(() => false)) {
       const pendingChooser = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
@@ -614,8 +633,10 @@ async function uploadFiles(page, filePaths) {
   }
 
   if (visibleCount < filePaths.length) {
+    const finalEvidence = await attachmentEvidence(page, filePaths).catch(() => null);
     throw new ImageWorkerError(
-      `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length})`,
+      `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length}). `
+        + `url=${page.url()} evidence=${JSON.stringify(finalEvidence || {})}`,
       "CHATGPT_ATTACHMENT_NOT_VISIBLE",
     );
   }
@@ -643,10 +664,19 @@ export class ChatGPTPage {
     const assistantBaseline = await assistantSnapshot(this.page);
     const attachmentCount = await uploadFiles(this.page, filePaths);
     const box = await findPromptBox(this.page, 20000);
-    try { await box.fill(prompt); }
-    catch {
-      await box.click();
-      await this.page.keyboard.insertText(prompt);
+    try {
+      await box.fill(prompt);
+    } catch {
+      try {
+        await box.click();
+        await this.page.keyboard.insertText(prompt);
+      } catch (error) {
+        throw new ImageWorkerError(
+          "ChatGPT source images were attached, but the story prompt could not be placed in the composer: "
+            + String(error?.message || error),
+          "CHATGPT_PROMPT_FILL_FAILED",
+        );
+      }
     }
     await this.page.waitForTimeout(500);
     return {
