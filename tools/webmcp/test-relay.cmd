@@ -21,6 +21,14 @@ if not exist "tools\webmcp\node_modules\@modelcontextprotocol\client" (
   if errorlevel 1 exit /b 1
 )
 
+powershell.exe -NoProfile -Command "$c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1',9333); exit 0 } catch { exit 1 } finally { $c.Dispose() }"
+if errorlevel 1 (
+  echo [FAIL] Persistent WebMCP Relay is not running on 127.0.0.1:9333.
+  echo Run start-workbench.cmd first, then refresh the Studio Comic Story page until it shows:
+  echo   WebMCP ready / 6 of 6 tools / Relay Embed loaded
+  exit /b 2
+)
+
 if "%~1"=="" (
   node tools\webmcp\smoke-test.mjs
 ) else if "%~2"=="" (
