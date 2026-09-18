@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -55,12 +56,12 @@ class NodeImageWorker:
             raise GPTImageError('IMAGE_WORKER_NOT_INSTALLED', 'Run npm install in tools/chatgpt-image first')
         return node
 
-    def _env(self) -> dict[str, str]:
+    def _env(self, gpt_url: str | None = None) -> dict[str, str]:
         env = os.environ.copy()
         env.setdefault('CWS_CHATGPT_IMAGE_PROFILE_DIR', str(self.profile_dir))
         env.setdefault('CWS_CHATGPT_IMAGE_OUTPUT_DIR', str(self.output_dir))
         env['CWS_CHATGPT_IMAGE_CDP_URL'] = self.cdp_url
-        env['CWS_CHATGPT_IMAGE_URL'] = self.gpt_url
+        env['CWS_CHATGPT_IMAGE_URL'] = str(gpt_url or self.gpt_url).strip()
         return env
 
     def installation_status(self) -> dict[str, Any]:
@@ -107,12 +108,15 @@ class NodeImageWorker:
     def check(self) -> dict:
         return self._run('check', timeout=60)
 
+    def prepare_story(self, payload: dict) -> dict:
+        return self._run('prepare-story', payload, timeout=120)
+
     def generate(self, payload: dict) -> dict:
         return self._run('generate', payload, timeout=660)
 
-    def start_login(self) -> dict:
+    def start_login(self, gpt_url: str | None = None) -> dict:
         self._node()
-        env = self._env()
+        env = self._env(gpt_url)
         flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0) if os.name == 'nt' else 0
         if os.name == 'nt':
             launcher = self.tool_dir / 'start-cdp-chrome.cmd'
@@ -127,7 +131,7 @@ class NodeImageWorker:
                     'started': True,
                     'browserMode': 'cdp',
                     'cdpUrl': self.cdp_url,
-                    'gptUrl': self.gpt_url,
+                    'gptUrl': str(gpt_url or self.gpt_url).strip(),
                     'message': 'Dedicated normal Chrome started. Sign in to ChatGPT and keep the window open.',
                 }
         subprocess.Popen(
@@ -139,7 +143,7 @@ class NodeImageWorker:
         return {
             'started': True,
             'browserMode': 'dedicated_profile',
-            'gptUrl': self.gpt_url,
+            'gptUrl': str(gpt_url or self.gpt_url).strip(),
             'message': 'Dedicated ChatGPT login browser started',
         }
 
@@ -180,6 +184,53 @@ class GPTImageService:
 
     def login(self) -> dict:
         return self.worker.start_login()
+
+    def prepare_story(self, task_id: str, prompt: str, gpt_url: str | None = None) -> dict:
+        text = str(prompt or '').strip()
+        if not text:
+            raise GPTImageError('STORY_PROMPT_REQUIRED', 'GPT Director story prompt is required')
+        if len(text) > 60000:
+            raise GPTImageError('STORY_PROMPT_TOO_LARGE', 'GPT Director story prompt is too large')
+        try:
+            task = self.director.load_task(task_id)
+        except ValueError as exc:
+            raise GPTImageError('INVALID_TASK_ID', 'Invalid GPT Director task ID') from exc
+        except FileNotFoundError as exc:
+            raise GPTImageError('TASK_NOT_FOUND', 'GPT Director task not found') from exc
+
+        selected_pages = [int(page) for page in task.source.selectedPages]
+        if not selected_pages:
+            raise GPTImageError('SOURCE_IMAGES_REQUIRED', 'GPT Director task has no selected source pages')
+
+        target_url = str(gpt_url or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
+        self.worker.start_login(target_url)
+        time.sleep(2.0)
+
+        api_base = os.getenv('CWS_STUDIO_API_URL', 'http://127.0.0.1:8100').rstrip('/')
+        payload = {
+            'taskId': task_id,
+            'prompt': text,
+            'gptUrl': target_url,
+            'sourcePages': [
+                {
+                    'page': page,
+                    'url': f'{api_base}/api/comic-story/gpt-director/tasks/{task_id}/pages/{page}/image',
+                }
+                for page in selected_pages
+            ],
+        }
+        result = self.worker.prepare_story(payload)
+        return {
+            'ok': True,
+            'prepared': bool(result.get('prepared')),
+            'sent': bool(result.get('sent')),
+            'taskId': task_id,
+            'sourcePages': selected_pages,
+            'attachmentCount': int(result.get('attachmentCount') or len(selected_pages)),
+            'promptLength': int(result.get('promptLength') or len(text)),
+            'gptUrl': str(result.get('url') or target_url),
+            'browserMode': str(result.get('browserMode') or 'cdp'),
+        }
 
     def _job_path(self, job_id: str) -> Path:
         if not JOB_ID_RE.fullmatch(job_id):
