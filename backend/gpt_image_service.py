@@ -387,6 +387,9 @@ class GPTImageService:
 
     def create_job(self, task_id: str, shot_id: str, replace: bool = False) -> dict:
         result, shot, shot_index = self._load_result_and_shot(task_id, shot_id)
+        prompt = str(shot.imagePrompt or '').strip()
+        if not prompt:
+            raise GPTImageError('IMAGE_PROMPT_REQUIRED', 'Shot imagePrompt is required for GPT keyframe generation')
         with self._lock:
             frames = self._load_frames_map(task_id)
             if str(shot_id) in frames and not replace:
@@ -407,9 +410,6 @@ class GPTImageService:
             }
             self._atomic_write(self._job_path(job_id), job)
         task = self.director.load_task(task_id)
-        prompt = str(shot.imagePrompt or '').strip()
-        if not prompt:
-            raise GPTImageError('IMAGE_PROMPT_REQUIRED', 'Shot imagePrompt is required for GPT keyframe generation')
         job['promptMode'] = 'direct'
         job['promptLength'] = len(prompt)
         job['promptSha256'] = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
