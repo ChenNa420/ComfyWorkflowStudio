@@ -377,25 +377,37 @@ async function pollDirectorAutoJob(jobId:string){
   throw new Error('GPT 自动创作等待超时，请稍后刷新页面查看任务状态。')
 }
 
+async function ensureDirectorChatGptReady(){
+  let lastError=''
+  for(let attempt=0;attempt<4;attempt++){
+    try{
+      const check=await postJson('/api/gpt-image/check',{})
+      if(check.ready&&check.authenticated)return true
+      lastError='ChatGPT 会话尚未就绪。'
+    }catch(value){
+      lastError=value instanceof Error?value.message:'ChatGPT 检测失败'
+    }
+    if(attempt<3)await sleep(1800)
+  }
+  const loginRequired=/LOGIN_REQUIRED|sign.?in|log.?in|登录|prompt box is unavailable/i.test(lastError)
+  if(loginRequired)throw new Error('专用 Chrome 已连接，但当前 ChatGPT 会话未检测到登录状态。若窗口里已经登录，请等待页面完全加载后再点一次；正常情况下登录会保存在专用 profile，不需要每次重新登录。')
+  throw new Error(`ChatGPT 专用 Chrome 检测失败：${lastError||'未知错误'}`)
+}
+
 async function startDirectorAuto(){
   if(!activeTask.value)throw new Error('请先创建 GPT Director Task。')
   await loadDirectorAutoStatus()
   if(!directorAutoStatus.value.relayReady)throw new Error('WebMCP Relay 未连接，请通过 start-workbench.cmd 启动工作台。')
   if(!directorAutoStatus.value.cdpReady){
     await postJson('/api/gpt-image/login',{})
-    notice.value='已打开童语工坊 GPT 专用 Chrome，正在等待浏览器就绪…'
+    notice.value='已打开童语工坊 GPT 专用 Chrome，正在等待浏览器与登录会话恢复…'
     for(let attempt=0;attempt<30&&!directorAutoStatus.value.cdpReady;attempt++){
       await sleep(1000)
       await loadDirectorAutoStatus()
     }
   }
   if(!directorAutoStatus.value.cdpReady)throw new Error('ChatGPT 专用 Chrome 未就绪，请打开后重试。')
-  try{
-    const check=await postJson('/api/gpt-image/check',{})
-    if(!check.ready||!check.authenticated)throw new Error('ChatGPT 尚未登录。')
-  }catch{
-    throw new Error('童语工坊 GPT 专用 Chrome 已打开，请先完成 ChatGPT 登录，然后再次点击“开始 GPT 创作”。')
-  }
+  await ensureDirectorChatGptReady()
   const job=await postJson(`/api/gpt-director-auto/tasks/${encodeURIComponent(activeTask.value.id)}/run`,{})
   directorAutoJob.value=job
   localStorage.setItem('cws-gpt-director-auto-job-id',job.jobId)
@@ -839,7 +851,7 @@ onUnmounted(()=>lifecycle.abort())
 
           <label class="gpt-url">童语工坊 GPT 页面地址<input v-model="gptUrl" placeholder="粘贴你的自定义 GPT 链接；留空则打开 ChatGPT 首页" @change="saveGptUrl"/></label>
           <div v-if="directorAutoJob" class="task-summary"><div class="task-status"><LoaderCircle v-if="['QUEUED','RUNNING'].includes(directorAutoJob.status)" class="spin" :size="18"/><CheckCircle2 v-else-if="directorAutoJob.status==='COMPLETED'" :size="18"/><CircleAlert v-else :size="18"/><div><b>自动创作：{{directorAutoJob.status}}</b><small>{{directorAutoJob.status==='RUNNING'?'正在读取全部漫画页并等待 GPT 返回结构化故事…':directorAutoJob.errorMessage||directorAutoJob.result?.title||'等待执行'}}</small></div></div></div>
-          <div class="task-summary"><div class="task-status"><component :is="directorAutoStatus.ready?CheckCircle2:CircleAlert" :size="18"/><div><b>自动创作环境：{{directorAutoStatus.ready?'READY':'CHECK'}}</b><small>Relay {{directorAutoStatus.relayReady?'Connected':'Offline'}} · ChatGPT CDP {{directorAutoStatus.cdpReady?'Connected':'Offline'}} · {{directorAutoStatus.message}}</small></div></div></div>
+          <div class="task-summary"><div class="task-status"><component :is="directorAutoStatus.ready?CheckCircle2:CircleAlert" :size="18"/><div><b>自动创作环境：{{directorAutoStatus.ready?'READY':'CHECK'}}</b><small>Relay {{directorAutoStatus.relayReady?'Connected':'Offline'}} · Chrome CDP {{directorAutoStatus.cdpReady?'Connected':'Offline'}} · {{directorAutoStatus.message}}</small></div></div></div>
           <div class="task-actions"><button class="secondary" :disabled="loading==='task'||['QUEUED','RUNNING'].includes(directorAutoJob?.status||'')" @click="createTask">仅创建 Task</button><button class="gpt-open" :disabled="!activeTask" @click="openGpt"><Sparkles :size="16"/>打开童语工坊 GPT<ExternalLink :size="15"/></button><button class="secondary" :disabled="!activeTask" @click="copyTaskPrompt"><Copy :size="15"/>{{promptCopied?'已复制':'复制任务说明'}}</button></div>
           <div :class="['mcp-state',{ok:webMcpRegistered}]"><div><component :is="webMcpRegistered?Wifi:WifiOff" :size="18"/><span><b>WebMCP {{webMcpRegistered?'可用':'不可用'}}</b><small>{{webMcpRegistered?'4 个业务工具 + 2 个开发期 Probe':'复制任务说明到 GPT，完成后把 JSON 粘贴到下方即可。'}}</small></span></div><button class="ghost small" @click="registerWebMcp"><RefreshCw :size="14"/>重新检测</button></div>
           <p v-if="webMcpError" class="mcp-help">{{webMcpError}}</p>
