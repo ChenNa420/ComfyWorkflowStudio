@@ -27,6 +27,8 @@ class FakeWorker:
     def __init__(self, image_path: Path):
         self.image_path = image_path
         self.calls = []
+        self.story_calls = []
+        self.login_calls = []
 
     def installation_status(self):
         return {'node': True, 'worker': True, 'dependencies': True, 'profileExists': True, 'readyForCheck': True}
@@ -34,8 +36,24 @@ class FakeWorker:
     def check(self):
         return {'ok': True, 'ready': True}
 
-    def start_login(self):
+    def cdp_ready(self):
+        return True
+
+    def start_login(self, gpt_url=None):
+        self.login_calls.append(gpt_url)
         return {'started': True}
+
+    def prepare_story(self, payload):
+        self.story_calls.append(payload)
+        return {
+            'ok': True,
+            'prepared': True,
+            'sent': False,
+            'attachmentCount': len(payload.get('sourcePages') or []),
+            'promptLength': len(payload.get('prompt') or ''),
+            'url': payload.get('gptUrl'),
+            'browserMode': 'cdp',
+        }
 
     def generate(self, payload):
         self.calls.append(payload)
@@ -102,6 +120,27 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(env['CWS_CHATGPT_IMAGE_CDP_URL'], DEFAULT_CHATGPT_IMAGE_CDP_URL)
         self.assertEqual(env['CWS_CHATGPT_IMAGE_URL'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         self.assertTrue(env['CWS_CHATGPT_IMAGE_URL'].startswith('https://chatgpt.com/g/'))
+
+    def test_prepares_story_draft_with_selected_source_pages_without_sending(self):
+        target = 'https://chatgpt.com/g/test-manual-director'
+        result = self.service.prepare_story(self.task_id, 'manual story prompt', target)
+        self.assertTrue(result['prepared'])
+        self.assertFalse(result['sent'])
+        self.assertEqual(result['attachmentCount'], 1)
+        self.assertEqual(result['sourcePages'], [1])
+        self.assertEqual(len(self.worker.story_calls), 1)
+        payload = self.worker.story_calls[0]
+        self.assertEqual(payload['prompt'], 'manual story prompt')
+        self.assertEqual(payload['gptUrl'], target)
+        self.assertEqual(payload['sourcePages'][0]['page'], 1)
+        self.assertIn(f'/gpt-director/tasks/{self.task_id}/pages/1/image', payload['sourcePages'][0]['url'])
+        self.assertEqual(self.worker.login_calls, [])
+
+    def test_prepare_story_starts_browser_only_when_cdp_is_not_ready(self):
+        target = 'https://chatgpt.com/g/test-manual-director'
+        self.worker.cdp_ready = lambda: False
+        self.service.prepare_story(self.task_id, 'manual story prompt', target)
+        self.assertEqual(self.worker.login_calls, [target])
 
     def test_generates_and_binds_frame(self):
         job = self.service.create_job(self.task_id, 'S01')
