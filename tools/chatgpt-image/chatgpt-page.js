@@ -335,20 +335,33 @@ async function attachmentEvidence(page, filePaths) {
     "[data-testid*='file']",
     "button[aria-label*='Remove attachment']",
     "button[aria-label*='remove attachment']",
+    "button[aria-label*='Remove file']",
+    "button[aria-label*='remove file']",
+    "button[aria-label*='Remove image']",
+    "button[aria-label*='remove image']",
     "button[aria-label*='移除附件']",
     "button[aria-label*='删除附件']",
+    "button[aria-label*='删除文件']",
+    "button[aria-label*='移除图片']",
     "img[src^='blob:']",
     "img[src*='files.oaiusercontent']",
   ].join(", ")).count().catch(() => 0);
-  return { matchedNames, visualCount };
+  const imageCount = await scope.locator("img").count().catch(() => 0);
+  return { matchedNames, visualCount, imageCount };
 }
 
-async function waitForAttachmentEvidence(page, filePaths, timeoutMs = 9000) {
+async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 9000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const evidence = await attachmentEvidence(page, filePaths);
-    if (evidence.matchedNames >= filePaths.length || evidence.visualCount >= filePaths.length) {
-      return Math.max(evidence.matchedNames, evidence.visualCount);
+    const imageDelta = Math.max(0, evidence.imageCount - Number(baseline?.imageCount || 0));
+    const visualDelta = Math.max(0, evidence.visualCount - Number(baseline?.visualCount || 0));
+    if (
+      evidence.matchedNames >= filePaths.length
+      || visualDelta >= filePaths.length
+      || imageDelta >= filePaths.length
+    ) {
+      return Math.max(evidence.matchedNames, visualDelta, imageDelta);
     }
     await page.waitForTimeout(350);
   }
@@ -365,16 +378,16 @@ async function chooseComposerFileInput(page) {
   return count ? preferred.nth(count - 1) : null;
 }
 
-async function uploadViaComposerInput(page, filePaths) {
+async function uploadViaComposerInput(page, filePaths, baseline) {
   const input = await chooseComposerFileInput(page);
   if (!input) return 0;
   await input.setInputFiles(filePaths);
   const assigned = await input.evaluate((element) => element.files?.length || 0).catch(() => 0);
   if (assigned < filePaths.length) return 0;
-  return waitForAttachmentEvidence(page, filePaths);
+  return waitForAttachmentEvidence(page, filePaths, baseline);
 }
 
-async function uploadViaFileChooser(page, filePaths) {
+async function uploadViaFileChooser(page, filePaths, baseline) {
   const addButton = page.locator([
     "[data-testid='composer-plus-btn']",
     "button[aria-label*='Attach']",
@@ -405,7 +418,7 @@ async function uploadViaFileChooser(page, filePaths) {
 
   if (!chooser) return 0;
   await chooser.setFiles(filePaths);
-  return waitForAttachmentEvidence(page, filePaths);
+  return waitForAttachmentEvidence(page, filePaths, baseline);
 }
 
 async function uploadFiles(page, filePaths) {
@@ -413,9 +426,15 @@ async function uploadFiles(page, filePaths) {
     throw new ImageWorkerError("At least one source image is required", "SOURCE_IMAGES_REQUIRED");
   }
 
-  let visibleCount = await uploadViaComposerInput(page, filePaths);
+  const baseline = await attachmentEvidence(page, filePaths);
+  let visibleCount = await uploadViaComposerInput(page, filePaths, baseline);
   if (visibleCount < filePaths.length) {
-    visibleCount = await uploadViaFileChooser(page, filePaths);
+    // Re-check before using the chooser fallback so a slow UI render cannot
+    // duplicate attachments that already finished uploading.
+    visibleCount = await waitForAttachmentEvidence(page, filePaths, baseline, 1800);
+  }
+  if (visibleCount < filePaths.length) {
+    visibleCount = await uploadViaFileChooser(page, filePaths, baseline);
   }
 
   if (visibleCount < filePaths.length) {
