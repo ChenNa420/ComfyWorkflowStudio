@@ -174,3 +174,48 @@ storage/gpt-director/<taskId>/visual-probe.json
 No source image base64 is persisted in Task/Result/localStorage/UI.
 
 This probe is intentionally descriptive. Human comparison with the actual comic page is the final acceptance step for `GPT Visual Access = PASS`.
+
+
+## GPT Director automatic orchestration
+
+Phase 1H-6E promotes the proven visual bridge into the production flow.
+
+Normal UI path:
+
+```text
+select comic pages
+→ 创建并开始 GPT 创作
+→ backend auto job
+→ WebMCP get_comic_story_task
+→ WebMCP get_comic_story_page × selectedPages
+→ temporary source images
+→ dedicated Chrome CDP
+→ 童语工坊 · AI动画编剧导演
+→ strict story JSON
+→ WebMCP import_gpt_story
+→ WebMCP complete_gpt_story_task
+→ Studio result stage
+```
+
+The temporary page images are removed after each run. The final story/result remains in the existing GPT Director task storage.
+
+Manual fallback / acceptance command:
+
+```bat
+tools\webmcp\run-gpt-director.cmd gdt-0123456789abcdef0123456789abcdef
+```
+
+Requirements:
+
+- `start-workbench.cmd` is running
+- Comic Story page is open with WebMCP `6/6`
+- Relay `127.0.0.1:9333` is connected
+- dedicated ChatGPT CDP Chrome `127.0.0.1:9222` is open and signed in
+- task has no previous result
+
+The production runner uses the four business tools, not the two probe tools:
+
+- `get_comic_story_task`
+- `get_comic_story_page`
+- `import_gpt_story`
+- `complete_gpt_story_task`
