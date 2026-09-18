@@ -238,6 +238,67 @@ export function completeJsonResponse(text) {
   }
 }
 
+export function parseableJsonResponse(text) {
+  try {
+    parseJsonObject(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function validateProductionResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Production result must be a JSON object')
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'error')) {
+    throw new Error('Production result returned an error object')
+  }
+  if (!value.sourceUnderstanding || typeof value.sourceUnderstanding !== 'object' || Array.isArray(value.sourceUnderstanding)) {
+    throw new Error('Production result is missing sourceUnderstanding')
+  }
+  if (!value.creativeStory || typeof value.creativeStory !== 'object' || Array.isArray(value.creativeStory)) {
+    throw new Error('Production result is missing creativeStory')
+  }
+  if (!Array.isArray(value.characterDefinitions)) {
+    throw new Error('Production result is missing characterDefinitions')
+  }
+  if (!Array.isArray(value.sceneDefinitions)) {
+    throw new Error('Production result is missing sceneDefinitions')
+  }
+  if (!Array.isArray(value.shots) || value.shots.length < 1 || value.shots.length > 24) {
+    throw new Error('Production result shots must contain 1-24 items')
+  }
+
+  const seenShotIds = new Set()
+  for (const [index, shot] of value.shots.entries()) {
+    if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
+      throw new Error('Production result shot ' + (index + 1) + ' must be an object')
+    }
+    const shotId = typeof shot.shotId === 'string' ? shot.shotId.trim() : ''
+    if (!shotId) throw new Error('Production result shot ' + (index + 1) + ' is missing shotId')
+    if (seenShotIds.has(shotId)) throw new Error('Production result contains duplicate shotId: ' + shotId)
+    seenShotIds.add(shotId)
+    if (typeof shot.imagePrompt !== 'string' || !shot.imagePrompt.trim()) {
+      throw new Error('Production result shot ' + shotId + ' is missing imagePrompt')
+    }
+    if (typeof shot.videoPrompt !== 'string' || !shot.videoPrompt.trim()) {
+      throw new Error('Production result shot ' + shotId + ' is missing videoPrompt')
+    }
+    if (!Array.isArray(shot.sourcePages) || shot.sourcePages.length < 1) {
+      throw new Error('Production result shot ' + shotId + ' is missing sourcePages')
+    }
+  }
+
+  return value
+}
+
+function directorError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
 export function isNewAssistantResponse(count, text, baseline) {
   return Boolean(
     text
@@ -272,7 +333,10 @@ async function waitForAssistantResponse(page, baseline, timeoutMs) {
       }
 
       const stableFor = Date.now() - stableSince
-      if (completeJsonResponse(text) && stableFor >= 1500) return text
+      // Return any stable parseable JSON promptly. Production-shape validation
+      // happens in sendPrompt so a parseable error object cannot sit here until
+      // the outer timeout just because ChatGPT still exposes a generating marker.
+      if (parseableJsonResponse(text) && stableFor >= 1500) return text
       if (!generating && stableFor >= 2500) return text
     }
 
@@ -309,40 +373,73 @@ async function sendComposerPrompt(page, prompt, timeoutMs) {
   )
 }
 
-export function jsonRepairPrompt(parseError) {
+export function jsonRepairPrompt(parseError, originalText = '') {
+  const raw = String(originalText || '')
   return [
     '你刚才返回的内容外形是 JSON，但无法被标准 JSON.parse() 解析。',
+    '下面会直接附上你刚才返回的完整原文。不要依赖会话记忆，请只根据这份原文修复。',
     '请保持故事、角色、场景、镜头数量、对白、imagePrompt、videoPrompt、negativePrompt、sourcePages 的内容不变，只修复 JSON 语法。',
     '特别检查所有 JSON 字符串内部出现的双引号，必须转义为 \\"。',
     '例如不能写： "english": "Bobo, "wait!""',
     '必须写成合法 JSON，例如： "english": "Bobo, \\"wait!\\""。',
     '不要解释，不要 Markdown 代码围栏，只返回一个完整合法 JSON 对象。',
     parseError ? '解析错误：' + String(parseError).slice(0, 500) : '',
-  ].filter(Boolean).join('\n')
+    '',
+    '===== 待修复的上一版完整原文开始 =====',
+    raw,
+    '===== 待修复的上一版完整原文结束 =====',
+  ].filter((line) => line !== null && line !== undefined).join('\n')
 }
 
 async function sendPrompt(page, prompt, timeoutMs) {
   const firstText = await sendComposerPrompt(page, prompt, timeoutMs)
+  let firstValue
   try {
-    parseJsonObject(firstText)
-    return firstText
+    firstValue = parseJsonObject(firstText)
   } catch (firstError) {
     console.error('[director] GPT returned invalid JSON; requesting one controlled syntax repair...')
     const repairedText = await sendComposerPrompt(
       page,
-      jsonRepairPrompt(firstError instanceof Error ? firstError.message : String(firstError)),
+      jsonRepairPrompt(
+        firstError instanceof Error ? firstError.message : String(firstError),
+        firstText,
+      ),
       Math.min(timeoutMs, 180000),
     )
+
+    let repairedValue
     try {
-      parseJsonObject(repairedText)
-      return repairedText
+      repairedValue = parseJsonObject(repairedText)
     } catch (secondError) {
-      throw new Error(
+      throw directorError(
+        'DIRECTOR_JSON_REPAIR_FAILED',
         'GPT returned invalid JSON after one repair attempt: '
         + (secondError instanceof Error ? secondError.message : String(secondError)),
       )
     }
+
+    try {
+      validateProductionResult(repairedValue)
+    } catch (validationError) {
+      throw directorError(
+        'DIRECTOR_INVALID_PRODUCTION_JSON',
+        'GPT repair returned JSON but not a valid production result: '
+        + (validationError instanceof Error ? validationError.message : String(validationError)),
+      )
+    }
+    return repairedText
   }
+
+  try {
+    validateProductionResult(firstValue)
+  } catch (validationError) {
+    throw directorError(
+      'DIRECTOR_INVALID_PRODUCTION_JSON',
+      'GPT returned JSON but not a valid production result: '
+      + (validationError instanceof Error ? validationError.message : String(validationError)),
+    )
+  }
+  return firstText
 }
 
 async function runChatGPT(task, files, timeoutMs) {
@@ -417,7 +514,9 @@ async function main() {
   } catch (error) {
     process.stdout.write(JSON.stringify({
       ok: false,
-      code: 'GPT_DIRECTOR_RUN_FAILED',
+      code: error && typeof error === 'object' && typeof error.code === 'string'
+        ? error.code
+        : 'GPT_DIRECTOR_RUN_FAILED',
       message: error instanceof Error ? error.message : String(error),
     }) + '\n')
     process.exitCode = 1
