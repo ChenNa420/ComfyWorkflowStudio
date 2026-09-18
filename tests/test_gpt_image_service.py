@@ -183,6 +183,23 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(len(self.worker.collect_calls), 1)
         self.assertEqual(self.worker.collect_calls[0]['assistantBaseline']['lastHash'], 'baseline')
 
+    def test_force_latest_ignores_stored_baseline_for_manual_recovery(self):
+        source = GPTDirectorSource(
+            token='token-force-latest',
+            name='comic',
+            filename='force-latest.pdf',
+            pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/p1', thumbnailUrl='/p1?t=1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.service.prepare_story(task.id, 'manual story prompt', 'https://chatgpt.com/g/test-manual-director')
+        value = self.service.collect_story(task.id, use_latest=True)
+        self.assertTrue(value['pending'])
+        payload = self.worker.collect_calls[-1]
+        self.assertEqual(payload['assistantBaseline'], {})
+        self.assertTrue(payload['useLatest'])
+
     def test_collect_latest_story_supports_legacy_task_without_prep_state(self):
         source = GPTDirectorSource(
             token='token-legacy',
