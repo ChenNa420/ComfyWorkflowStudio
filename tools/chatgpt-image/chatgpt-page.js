@@ -590,13 +590,33 @@ export class ChatGPTPage {
     };
   }
 
-  async collectStory(baseline) {
+  async collectStory(baseline, useLatest = false) {
     await assertAuthenticated(this.page, 20000);
     const current = await assistantSnapshot(this.page);
-    const changed = current.count > Number(baseline?.count || 0)
+    const baselineCount = Number(baseline?.count || 0);
+    const changed = current.count > baselineCount
       || (current.text && current.lastHash !== String(baseline?.lastHash || ""));
-    if (!changed || await isGenerating(this.page)) {
-      return { ok: true, pending: true, repaired: false };
+    const generating = await isGenerating(this.page);
+
+    if (generating) {
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: "GPT_STILL_GENERATING",
+        assistantCount: current.count,
+        baselineCount,
+      };
+    }
+    if ((!useLatest && !changed) || !current.text) {
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: current.text ? "NO_NEW_ASSISTANT_REPLY" : "ASSISTANT_REPLY_NOT_FOUND",
+        assistantCount: current.count,
+        baselineCount,
+      };
     }
 
     // Guard against layouts where the stop/generating marker disappears briefly
@@ -609,7 +629,14 @@ export class ChatGPTPage {
       || stable.count !== current.count
       || stable.lastHash !== current.lastHash
     ) {
-      return { ok: true, pending: true, repaired: false };
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: "ASSISTANT_REPLY_NOT_STABLE",
+        assistantCount: stable.count,
+        baselineCount,
+      };
     }
 
     let result;
