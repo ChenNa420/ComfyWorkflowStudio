@@ -20,6 +20,16 @@ export const SELECTORS = Object.freeze({
     "button[aria-label*='Stop']",
     "button[aria-label*='停止']",
   ].join(", "),
+  loggedOut: [
+    "button:has-text('登录')",
+    "a:has-text('登录')",
+    "button:has-text('Log in')",
+    "a:has-text('Log in')",
+    "button:has-text('免费注册')",
+    "a:has-text('免费注册')",
+    "button:has-text('Sign up')",
+    "a:has-text('Sign up')",
+  ].join(", "),
 });
 
 export function compactImageSource(source) {
@@ -70,6 +80,41 @@ async function findPromptBox(page, timeoutMs) {
   }
 }
 
+async function hasVisibleLoggedOutMarker(page) {
+  const markers = page.locator(SELECTORS.loggedOut);
+  const count = await markers.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    if (await markers.nth(index).isVisible().catch(() => false)) return true;
+  }
+  return false;
+}
+
+async function assertAuthenticated(page, timeoutMs = 20000) {
+  await findPromptBox(page, timeoutMs);
+  if (await hasVisibleLoggedOutMarker(page)) {
+    throw new ImageWorkerError(
+      "ChatGPT is open but this dedicated browser profile is not signed in. Run the login command and complete sign-in in that window.",
+      "CHATGPT_LOGIN_REQUIRED",
+    );
+  }
+  return { ok: true, ready: true, authenticated: true, url: page.url() };
+}
+
+async function waitUntilAuthenticated(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const promptVisible = await page.locator(SELECTORS.prompt).first().isVisible().catch(() => false);
+    if (promptVisible && !(await hasVisibleLoggedOutMarker(page))) {
+      return { ok: true, ready: true, authenticated: true, url: page.url() };
+    }
+    await page.waitForTimeout(1000);
+  }
+  throw new ImageWorkerError(
+    "Timed out waiting for ChatGPT sign-in. Complete login in the dedicated browser window, then retry.",
+    "CHATGPT_LOGIN_REQUIRED",
+  );
+}
+
 async function waitForNewImage(page, beforeKeys, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let stableSignature = "";
@@ -96,11 +141,15 @@ export class ChatGPTPage {
   }
 
   async assertReady(timeoutMs = 20000) {
-    await findPromptBox(this.page, timeoutMs);
-    return { ok: true, ready: true, url: this.page.url() };
+    return assertAuthenticated(this.page, timeoutMs);
+  }
+
+  async waitForLogin(timeoutMs) {
+    return waitUntilAuthenticated(this.page, timeoutMs);
   }
 
   async generate(prompt) {
+    await assertAuthenticated(this.page, 20000);
     const box = await findPromptBox(this.page, 20000);
     const before = new Set((await listImageCandidates(this.page)).map(candidateKey));
     try { await box.fill(prompt); }
