@@ -263,7 +263,7 @@ class GPTImageService:
         path.relative_to(self.frames_root)
         return path
 
-    def collect_story(self, task_id: str, gpt_url: str | None = None) -> dict:
+    def collect_story(self, task_id: str, gpt_url: str | None = None, use_latest: bool = False) -> dict:
         try:
             task = self.director.load_task(task_id)
         except ValueError as exc:
@@ -284,12 +284,18 @@ class GPTImageService:
             }
 
         prep_path = self._story_prep_path(task_id)
-        if not prep_path.is_file():
+        if prep_path.is_file():
+            try:
+                prep = json.loads(prep_path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise GPTImageError('STORY_PREP_INVALID', 'Stored GPT story preparation state is invalid') from exc
+        elif use_latest:
+            prep = {
+                'gptUrl': str(gpt_url or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip(),
+                'assistantBaseline': {'count': 0, 'lastHash': ''},
+            }
+        else:
             raise GPTImageError('STORY_PREP_REQUIRED', 'Prepare the GPT story draft before collecting the result')
-        try:
-            prep = json.loads(prep_path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise GPTImageError('STORY_PREP_INVALID', 'Stored GPT story preparation state is invalid') from exc
 
         target_url = str(gpt_url or prep.get('gptUrl') or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
         collected = self.worker.collect_story({
