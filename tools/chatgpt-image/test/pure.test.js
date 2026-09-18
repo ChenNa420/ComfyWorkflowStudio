@@ -60,6 +60,20 @@ test("prompt composition includes consistency and current shot", () => {
   assert.match(value, /16:9/);
 });
 
+
+test("direct keyframe prompt is sent to GPT unchanged", () => {
+  const prompt = "A puppy in a warm kitchen, cinematic 2D children's animation.";
+  const value = composeGenerationPrompt({
+    prompt,
+    promptMode: "direct",
+    characterProfile: "this must not be injected",
+    styleProfile: "this must not be injected",
+    negativePrompt: "this must not be injected",
+    aspectRatio: "9:16",
+  });
+  assert.equal(value, prompt);
+});
+
 test("maps supported image MIME extensions", () => {
   assert.equal(extensionForMime("image/jpeg"), "jpg");
   assert.equal(extensionForMime("image/webp"), "webp");
