@@ -56,6 +56,22 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
+async function waitFor(label, timeoutMs, probe) {
+  const started = Date.now()
+  let lastError = null
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const value = await probe()
+      if (value) return value
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+  if (lastError) throw lastError
+  throw new Error(label + ' timed out')
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
@@ -91,24 +107,18 @@ async function main() {
     console.log('      PASS')
 
     console.log('[2/5] webmcp_list_sources')
-    const sourcesResult = await withTimeout(
-      client.callTool({ name: 'webmcp_list_sources', arguments: {} }),
-      options.timeoutMs,
-      'webmcp_list_sources',
-    )
-    const sourcesText = JSON.stringify(parseJsonText(sourcesResult, 'webmcp_list_sources'))
-    if (!sourcesText.includes('127.0.0.1:5174') && !sourcesText.includes('localhost:5174')) {
-      throw new Error('ComfyWorkflowStudio browser source not found')
-    }
-    console.log('      PASS')
+    const sourceDiscovery = await waitFor('ComfyWorkflowStudio browser source', options.timeoutMs, async () => {
+      const sourcesResult = await client.callTool({ name: 'webmcp_list_sources', arguments: {} })
+      const sources = parseJsonText(sourcesResult, 'webmcp_list_sources')
+      const sourcesText = JSON.stringify(sources)
+      if (sourcesText.includes('127.0.0.1:5174') || sourcesText.includes('localhost:5174')) {
+        return { sources, sourcesText }
+      }
+      return null
+    })
+    console.log('      PASS - Studio browser source connected')
 
     console.log('[3/5] webmcp_list_tools + tools/list')
-    const listResult = await withTimeout(
-      client.callTool({ name: 'webmcp_list_tools', arguments: {} }),
-      options.timeoutMs,
-      'webmcp_list_tools',
-    )
-    const managementText = JSON.stringify(parseJsonText(listResult, 'webmcp_list_tools'))
     const required = [
       'get_comic_story_task',
       'get_comic_story_page',
@@ -117,13 +127,17 @@ async function main() {
       'probe_source_page_image',
       'probe_keyframe_transfer',
     ]
-    for (const name of required) {
-      if (!managementText.includes(name)) throw new Error('Missing relayed tool: ' + name)
-    }
-    const toolList = await withTimeout(client.listTools(), options.timeoutMs, 'tools/list')
-    for (const name of required) {
-      if (!findRelayedTool(toolList.tools, name)) throw new Error('tools/list missing: ' + name)
-    }
+    const toolDiscovery = await waitFor('6/6 Studio relay tools', options.timeoutMs, async () => {
+      const listResult = await client.callTool({ name: 'webmcp_list_tools', arguments: {} })
+      const management = parseJsonText(listResult, 'webmcp_list_tools')
+      const managementText = JSON.stringify(management)
+      if (!required.every((name) => managementText.includes(name))) return null
+
+      const listed = await client.listTools()
+      if (!required.every((name) => findRelayedTool(listed.tools, name))) return null
+      return { management, toolList: listed }
+    })
+    const toolList = toolDiscovery.toolList
     console.log('      PASS - 6/6 tools')
 
     if (!options.taskId) {
