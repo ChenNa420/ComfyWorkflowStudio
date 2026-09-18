@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import { findRelayedTool, firstText, parseArgs } from '../smoke-test.mjs'
 import { parseArgs as parseVisionArgs, parseJsonObject } from '../gpt-visual-smoke.mjs'
+import { parseArgs as parseDirectorArgs, parseJsonObject as parseDirectorJson, composeDirectorPrompt } from '../gpt-director-runner.mjs'
 
 test('parseArgs accepts task and page', () => {
   const value = parseArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef', '--page', '4'])
@@ -42,4 +43,29 @@ test('parseJsonObject accepts fenced JSON', () => {
 
 test('parseJsonObject rejects text without JSON', () => {
   assert.throws(() => parseJsonObject('hello'))
+})
+
+
+test('director parseArgs requires safe task id', () => {
+  const value = parseDirectorArgs(['--task-id', 'gdt-0123456789abcdef0123456789abcdef'])
+  assert.equal(value.taskId, 'gdt-0123456789abcdef0123456789abcdef')
+  assert.throws(() => parseDirectorArgs(['--task-id', '../bad']))
+})
+
+test('director parseJsonObject accepts fenced output', () => {
+  const value = parseDirectorJson("```json\n{\"creativeStory\":{\"title\":\"Demo\"},\"shots\":[]}\n```")
+  assert.equal(value.creativeStory.title, 'Demo')
+  assert.throws(() => parseDirectorJson('not-json'))
+})
+
+test('director prompt includes selected pages and strict result fields', () => {
+  const prompt = composeDirectorPrompt({
+    id: 'gdt-0123456789abcdef0123456789abcdef',
+    source: { selectedPages: [4, 6, 9] },
+    settings: { targetAge: '3-6岁', level: 'Pre-A1', style: '温馨冒险' },
+  })
+  assert.match(prompt, /4, 6, 9/)
+  assert.match(prompt, /sourceUnderstanding/)
+  assert.match(prompt, /imagePrompt/)
+  assert.match(prompt, /videoPrompt/)
 })
