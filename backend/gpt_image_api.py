@@ -19,6 +19,7 @@ class PrepareStoryRequest(BaseModel):
 
 class CollectStoryRequest(BaseModel):
     gptUrl: str | None = None
+    useLatest: bool = False
 
 
 def gpt_image_router() -> APIRouter:
@@ -70,7 +71,7 @@ def gpt_image_router() -> APIRouter:
     @router.post('/tasks/{task_id}/collect-story')
     def collect_story(task_id: str, payload: CollectStoryRequest):
         try:
-            return service.collect_story(task_id, payload.gptUrl)
+            return service.collect_story(task_id, payload.gptUrl, payload.useLatest)
         except GPTImageError as exc:
             fail(exc)
 
