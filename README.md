@@ -97,3 +97,31 @@ python -m unittest discover -s tests -v
 npm run typecheck
 npm run build
 ```
+
+
+## 一键启动 / 关闭
+
+启动整个工作台：
+
+```bat
+start-workbench.cmd
+```
+
+启动脚本会负责：
+
+- Studio API：8100
+- Studio Web：5174
+- WebMCP Relay：9333
+- ChatGPT 专用 CDP Chrome：9222（未运行时自动启动）
+- ComfyUI：只检测，不自动启动、不自动关闭
+- LM Studio：不使用
+
+关闭本项目启动的服务：
+
+```bat
+stop-workbench.cmd
+```
+
+关闭脚本只会停止确认属于 ComfyWorkflowStudio 的 API、Web、WebMCP Relay 和专用 ChatGPT Chrome。它会检查进程命令行，遇到占用同端口的其他程序会跳过并告警，不会盲目按端口杀进程。
+
+`stop-workbench.cmd` 不会关闭 ComfyUI，也不会操作 LM Studio。
