@@ -436,3 +436,38 @@
     column-gap:10px!important;
   }
 }
+
+/* Storyboard V2 — balanced shot columns.
+   The old minmax(0,1fr) shot-info track consumed almost all free width.
+   Distribute the remaining space across shot info / duration / status / action
+   so the row reads as a balanced production table instead of one large blank
+   center area. */
+.table-panel .shot-row{
+  grid-template-columns:
+    42px
+    68px
+    minmax(240px,1.4fr)
+    minmax(86px,.72fr)
+    minmax(118px,.82fr)
+    minmax(108px,.82fr)!important;
+  column-gap:16px!important;
+  align-items:center;
+}
+.table-panel .shot-row>*{min-width:0}
+.table-panel .shot-row .thumb{width:52px;height:42px}
+.table-panel .shot-row .shot-copy{max-width:420px}
+.table-panel .shot-row>span:nth-of-type(1){justify-self:start}
+.table-panel .shot-row .status-chip{justify-self:start}
+.table-panel .shot-row>button{justify-self:start;min-width:92px}
+@media(max-width:1180px){
+  .table-panel .shot-row{
+    grid-template-columns:
+      38px
+      62px
+      minmax(220px,1.3fr)
+      minmax(78px,.7fr)
+      minmax(108px,.8fr)
+      minmax(100px,.8fr)!important;
+    column-gap:12px!important;
+  }
+}
