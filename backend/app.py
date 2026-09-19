@@ -16,6 +16,7 @@ from backend.gpt_director_auto_api import gpt_director_auto_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
+from backend.settings_api import settings_router
 from backend.workflow.catalog import import_payload
 from backend.workflow.dependencies import execution_node_types
 from backend.workflow.dependencies_api import workflow_dependencies_router
@@ -287,6 +288,7 @@ def create_app() -> FastAPI:
     app.include_router(workflow_pilot_router(db))
     app.include_router(workflow_runs_router(db))
     app.include_router(bindings_router(db))
+    app.include_router(settings_router(db))
     return app
 
 

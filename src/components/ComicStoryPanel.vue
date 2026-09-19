@@ -198,10 +198,8 @@ creativeStory 必须包含 title、summary、story、adaptationNotes；adaptatio
 
 每个 shot 必须包含：shotId、title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。shotId 必须全局唯一；speaker 必须为 string 或 null；sourcePages 必须为非空 integer array，且只能引用这些已选页：${pages}；imagePrompt 和 videoPrompt 必须非空。
 
-【JSON 合法性硬约束】
-最终输出必须能被标准 JSON.parse() 一次解析成功。字符串内部的英文双引号必须转义为 \\\"。尤其 videoPrompt 中引用对白时，禁止写 exactly: "Hello!"，必须写成 exactly: \\\"Hello!\\\"。不要输出裸换行、非法控制字符或末尾多余逗号。
-
-返回前请在内部完成一次等价于 JSON.parse(最终全文) 的检查；若失败先自行修复。工作台还会进行本地 repair 和严格校验。`
+【JSON 格式要求】
+仅输出可被标准 JSON.parse() 直接解析的完整 JSON，不要添加 Markdown 代码块或解释文字。字符串内的双引号必须转义，例如对白应写为 exactly: \\\"Hello!\\\"。不得包含裸换行、非法控制字符或末尾逗号。输出前请检查 JSON 语法和完整性。`
 })
 
 function formatBytes(value:number){

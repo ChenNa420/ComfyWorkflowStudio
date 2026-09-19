@@ -25,6 +25,7 @@ import MaterialsGallery from './components/MaterialsGallery.vue'
 import OutputGallery from './components/OutputGallery.vue'
 import TaskQueuePanel from './components/TaskQueuePanel.vue'
 import WorkflowImportPanel from './components/WorkflowImportPanel.vue'
+import SystemSettingsPanel from './components/SystemSettingsPanel.vue'
 
 defineProps<{ suppressWorkflowPage?: boolean }>()
 
@@ -81,6 +82,7 @@ const workbenchLibraryReadyWorkflowIds = ref<Record<string, true>>({})
 const workbenchExecutableWorkflowIds = ref<Record<string, true>>({})
 const workbenchReadinessLoaded = ref(false)
 const workbenchReadinessError = ref('')
+const workbenchSettingsNotice = ref('')
 const workbenchHelpOpen = ref(false)
 
 const kidsNav: NavItem[] = [
@@ -197,8 +199,12 @@ const displayCharacters = computed(() => {
 })
 
 type WorkbenchShotStatus = 'pending' | 'running' | 'completed' | 'failed'
+type WorkbenchShot = {
+  index:number; shotId:string; id:string; title:string; english:string; chinese:string; duration:number
+  workflow:string; status:WorkbenchShotStatus; frameUrl:string; videoUrl:string; videoPoster:string; generatedAt:string
+}
 
-const workbenchShots = computed(() => {
+const workbenchShots = computed<WorkbenchShot[]>(() => {
   const source = comicEpisode.value?.shots || []
   return source.map((shot: any, index: number) => {
     const shotId = String(shot.shotId ?? shot.id ?? index + 1)
@@ -449,11 +455,12 @@ function onHashChange() {
 
 async function loadData() {
   try {
-    const [healthResponse, workflowResponse, knowledgeResponse, preflightResponse] = await Promise.all([
+    const [healthResponse, workflowResponse, knowledgeResponse, preflightResponse, settingsResponse] = await Promise.all([
       fetch('/api/health'),
       fetch('/api/workflows'),
       fetch('/api/workflow-knowledge?health=READY&limit=1000'),
       fetch('/api/readiness/preflight?certifiedOnly=true&limit=1000'),
+      fetch('/api/settings'),
     ])
     if (!healthResponse.ok) throw new Error(`Health HTTP ${healthResponse.status}`)
     health.value = await healthResponse.json()
@@ -486,7 +493,15 @@ async function loadData() {
       workbenchReadinessError.value = `Runtime 预检读取失败：HTTP ${preflightResponse.status}`
     }
 
-    ensureWorkbenchDefaultWorkflow()
+    const appSettings = settingsResponse.ok ? await settingsResponse.json() : null
+    const preferred = String(appSettings?.workflow?.productionVideoWorkflowId || appSettings?.workflow?.defaultVideoWorkflowId || '')
+    workbenchSettingsNotice.value = ''
+    if (preferred && workbenchVideoWorkflows.value.some(item => item.id === preferred)) {
+      workbenchDefaultWorkflow.value = preferred
+    } else {
+      ensureWorkbenchDefaultWorkflow()
+      if (preferred) workbenchSettingsNotice.value = '设置中的默认视频工作流已失效，已安全回退到第一个可用工作流。'
+    }
     error.value = ''
   } catch (value) {
     workbenchReadinessLoaded.value = true
@@ -516,6 +531,7 @@ function onCatalogUpdated() { loadData() }
 onMounted(() => {
   window.addEventListener('hashchange', onHashChange)
   window.addEventListener('workflow-catalog-updated', onCatalogUpdated)
+  window.addEventListener('system-settings-updated', onCatalogUpdated)
   loadData()
   onHashChange()
 })
@@ -523,6 +539,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('hashchange', onHashChange)
   window.removeEventListener('workflow-catalog-updated', onCatalogUpdated)
+  window.removeEventListener('system-settings-updated', onCatalogUpdated)
 })
 </script>
 
@@ -691,7 +708,7 @@ onUnmounted(() => {
               <h3>生成设置</h3>
               <label>视频工作流<select v-model="workbenchDefaultWorkflow" :disabled="!workbenchVideoWorkflows.length"><option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option><option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
               <small :class="['wb-workflow-gate',{error:!!workbenchReadinessError}]">
-                {{ workbenchReadinessError || (workbenchReadinessLoaded ? `工作流库可用视频工作流 ${workbenchVideoWorkflows.length} 个 · 可执行 ${Object.keys(workbenchExecutableWorkflowIds).filter(id=>workbenchVideoWorkflows.some(w=>w.id===id)).length} 个` : '正在读取工作流状态…') }}
+                {{ workbenchReadinessError || workbenchSettingsNotice || (workbenchReadinessLoaded ? `工作流库可用视频工作流 ${workbenchVideoWorkflows.length} 个 · 可执行 ${Object.keys(workbenchExecutableWorkflowIds).filter(id=>workbenchVideoWorkflows.some(w=>w.id===id)).length} 个` : '正在读取工作流状态…') }}
               </small>
               <label>分辨率<select v-model="workbenchResolution"><option>1080 × 1920 (9:16)</option><option>1920 × 1080 (16:9)</option><option>720 × 1280 (9:16)</option></select></label>
               <label>生成时长<select v-model="workbenchDurationMode"><option>按分镜时长</option><option>统一 5 秒</option><option>统一 10 秒</option></select></label>
@@ -748,7 +765,7 @@ onUnmounted(() => {
       </template>
 
       <template v-else-if="activePage==='settings'">
-        <section class="settings-layout"><aside class="panel settings-menu"><button class="active">ComfyUI</button><button>存储</button><button>任务策略</button><button>工作流</button><button>高级</button></aside><article class="panel form-panel"><h3>ComfyUI 连接</h3><label>地址<input value="http://127.0.0.1:8188"/></label><div class="connection-card"><span class="dot" :class="health?.comfyUi==='connected'?'ok':''"></span><div><b>{{ health?.comfyUi==='connected'?'当前可连接':'当前不可连接' }}</b><small>默认从 COMFYUI_URL 读取，未配置时使用 127.0.0.1:8188。</small></div></div><h3>安全执行策略</h3><div class="form-grid"><label>最大并发<select><option>1 · 串行</option></select></label><label>输出超时<input value="900 秒"/></label></div><label class="check-line disabled"><input type="checkbox" disabled/> UNKNOWN 自动重试（强制禁止）</label><div class="notice">发生提交后网络异常时，如果无法确定 ComfyUI 是否已接收任务，状态标记为 UNKNOWN / NEEDS_REVIEW，不会自动重复提交。</div></article></section>
+        <SystemSettingsPanel/>
       </template>
 
       <p v-else class="panel empty-page">页面正在接入真实数据。</p>

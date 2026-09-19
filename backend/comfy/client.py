@@ -125,4 +125,6 @@ class ComfyClient:
 
 
 def comfy_url_from_env() -> str:
-    return os.getenv('COMFYUI_URL', 'http://127.0.0.1:8188')
+    from backend.settings import effective_comfy_url
+
+    return effective_comfy_url()[0]
