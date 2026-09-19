@@ -149,3 +149,103 @@
   .workbench-content .wb-project-progress{border-left:0;border-top:1px solid #edf0f6;padding-top:10px}
   .workbench-content .wb-side{grid-template-columns:1fr}
 }
+
+/* Workbench V4 — reference-scale refinement (sidebar intentionally excluded) */
+.workbench-content{padding:14px 22px 32px}
+.workbench-content .wb-header{min-height:88px;margin-bottom:14px}
+.workbench-content .wb-header h1{margin:10px 0 5px;font-size:29px;line-height:1.06;letter-spacing:-.7px}
+.workbench-content .wb-header p{font-size:11.5px}
+.workbench-content .wb-breadcrumbs{font-size:9.5px}
+.workbench-content .wb-header-actions .secondary,
+.workbench-content .wb-header-actions .primary{min-height:42px;padding:10px 16px;font-size:11.5px}
+
+.workbench-content .wb-steps{height:68px;margin-bottom:14px;padding:8px 16px}
+.workbench-content .wb-step{min-height:50px;gap:10px;padding:5px 20px 5px 8px}
+.workbench-content .wb-step>span{width:34px;height:34px;font-size:11px}
+.workbench-content .wb-step b{font-size:11px}
+.workbench-content .wb-step small{font-size:9px}
+
+.workbench-content .wb-layout{grid-template-columns:minmax(0,1fr) minmax(286px,18.2%);gap:14px}
+.workbench-content .wb-main,
+.workbench-content .wb-side{gap:14px}
+
+.workbench-content .wb-project-card{grid-template-columns:185px minmax(0,1fr) 235px;gap:20px;min-height:144px;padding:16px 18px}
+.workbench-content .wb-project-cover{width:185px;height:116px;border-radius:12px}
+.workbench-content .wb-project-cover img{object-fit:cover;object-position:center center}
+.workbench-content .wb-project-copy h2{margin:5px 0 9px;font-size:20px}
+.workbench-content .wb-project-copy p{margin-top:9px;font-size:10.5px;line-height:1.5}
+.workbench-content .wb-meta{gap:6px}
+.workbench-content .wb-meta span,
+.workbench-content .wb-meta em{padding:5px 8px;font-size:9.5px}
+.workbench-content .wb-project-progress{min-height:104px;gap:13px;padding-left:18px}
+.workbench-content .wb-ring{width:82px;height:82px}
+.workbench-content .wb-ring b{font-size:16px}
+.workbench-content .wb-project-progress strong{font-size:12.5px}
+.workbench-content .wb-project-progress small{font-size:9px}
+
+.workbench-content .wb-shot-card{padding:15px 18px 0}
+.workbench-content .wb-shot-toolbar{min-height:50px}
+.workbench-content .wb-shot-toolbar>div:first-child{gap:14px}
+.workbench-content .wb-shot-toolbar h3{font-size:17px}
+.workbench-content .wb-filter-tabs{gap:6px}
+.workbench-content .wb-filter-tabs button{padding:8px 12px;font-size:9.5px}
+.workbench-content .wb-shot-toolbar>.secondary.small{min-height:34px;padding:7px 11px;font-size:9.5px}
+
+.workbench-content .wb-shot-head,
+.workbench-content .wb-shot-row{
+  grid-template-columns:3.4% 4% 10.6% 24.5% 7% 12.6% 10.8% 11% 16.1%
+}
+.workbench-content .wb-shot-head{min-height:40px;font-size:10px}
+.workbench-content .wb-shot-row{min-height:72px;font-size:10.5px}
+.workbench-content .wb-shot-head>*,
+.workbench-content .wb-shot-row>*{padding-right:9px}
+.workbench-content .wb-shot-thumb{width:84px;height:54px;border-radius:9px}
+.workbench-content .wb-shot-thumb img{object-fit:cover;object-position:center center}
+.workbench-content .wb-shot-copy{gap:2px}
+.workbench-content .wb-shot-copy strong{font-size:12.5px;line-height:1.25}
+.workbench-content .wb-shot-copy small{font-size:9.5px;line-height:1.25}
+.workbench-content .wb-shot-copy button{font-size:8.5px;margin-top:2px}
+.workbench-content .wb-shot-row select{height:36px;padding:0 9px;font-size:9.5px}
+.workbench-content .wb-render-status{font-size:9.5px}
+.workbench-content .wb-render-status i{width:14px;height:14px}
+.workbench-content .wb-result-cell{min-height:46px;font-size:9.5px}
+.workbench-content .wb-video-thumb{width:72px;height:46px}
+.workbench-content .wb-video-thumb img{object-fit:cover;object-position:center center}
+.workbench-content .wb-row-actions{gap:6px}
+.workbench-content .wb-row-actions .secondary.small,
+.workbench-content .wb-generate-btn{min-height:34px;padding:7px 10px;font-size:9.5px}
+
+.workbench-content .wb-batch-bar{min-height:70px;margin:0 -18px;padding:13px 18px}
+.workbench-content .wb-batch-bar>div{gap:9px}
+.workbench-content .wb-batch-bar b{font-size:10.5px}
+.workbench-content .wb-batch-bar .secondary,
+.workbench-content .wb-batch-bar .primary{min-height:42px;padding:10px 14px;font-size:11px}
+
+.workbench-content .wb-side-card{padding:14px}
+.workbench-content .wb-side-card h3{font-size:14px;margin-bottom:10px}
+.workbench-content .wb-current-preview{height:184px;border-radius:11px}
+.workbench-content .wb-current-preview img{object-fit:cover;object-position:center center}
+.workbench-content .wb-preview-card>b{margin-top:9px;font-size:11px}
+.workbench-content .wb-preview-card>small{font-size:9.5px}
+.workbench-content .wb-settings-card{gap:9px}
+.workbench-content .wb-settings-card label{gap:5px;font-size:9.5px}
+.workbench-content .wb-settings-card select,
+.workbench-content .wb-settings-card input{height:39px;padding:0 10px;font-size:9.5px}
+.workbench-content .wb-settings-card details{font-size:9.5px}
+.workbench-content .wb-progress-card{padding-bottom:16px}
+.workbench-content .wb-progress-head b{font-size:10px}
+.workbench-content .wb-progress-line{height:6px;margin:10px 0 13px}
+.workbench-content .wb-progress-list{gap:8px;margin-top:11px}
+.workbench-content .wb-progress-list>div{grid-template-columns:17px 1fr auto;gap:7px}
+.workbench-content .wb-progress-list p{font-size:9.5px}
+.workbench-content .wb-progress-list small{font-size:8.5px}
+.workbench-content .wb-progress-dot{width:16px;height:16px;font-size:8px}
+
+/* Do not collapse the reference desktop composition too early. */
+@media(max-width:1280px){
+  .workbench-content .wb-project-card{grid-template-columns:165px minmax(0,1fr) 210px}
+  .workbench-content .wb-project-cover{width:165px;height:104px}
+  .workbench-content .wb-shot-head,
+  .workbench-content .wb-shot-row{grid-template-columns:3.4% 4% 10% 24% 7% 13% 11% 11% 16.6%}
+  .workbench-content .wb-shot-thumb{width:76px;height:49px}
+}
