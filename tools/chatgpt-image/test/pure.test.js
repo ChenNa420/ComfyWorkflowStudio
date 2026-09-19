@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { candidateKey, diffCandidates, normalizeStoryResultShape, parseStoryJson, parseStoryJsonDetailed, repairGptJsonText, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
+import { attachmentEvidenceCount, candidateKey, diffCandidates, normalizeStoryResultShape, parseStoryJson, parseStoryJsonDetailed, repairGptJsonText, sessionPayloadAuthenticated, storyRepairPrompt, validateStoryResult } from "../chatgpt-page.js";
 import { DEFAULT_CHATGPT_IMAGE_CDP_URL, DEFAULT_CHATGPT_IMAGE_URL, loadConfig, validateCdpUrl, validateChatGPTUrl } from "../config.js";
 import { composeGenerationPrompt, validateSourcePageUrl } from "../image-generator.js";
 import { extensionForMime } from "../image-capture.js";
@@ -44,6 +44,17 @@ test("candidate diff keeps only unseen images", () => {
   const fresh = { source: "https://example.test/b.png" };
   const before = new Set([candidateKey(old)]);
   assert.deepEqual(diffCandidates(before, [old, fresh, fresh]), [fresh]);
+});
+
+test("attachment preview remains authoritative after ChatGPT clears the file input", () => {
+  const baseline = { matchedNames: 0, visualCount: 1, imageCount: 2 };
+  const current = { matchedNames: 0, visualCount: 4, imageCount: 5 };
+  assert.equal(attachmentEvidenceCount(baseline, current), 3);
+});
+
+test("attachment evidence rejects an unchanged composer", () => {
+  const baseline = { matchedNames: 0, visualCount: 1, imageCount: 2 };
+  assert.equal(attachmentEvidenceCount(baseline, baseline), 0);
 });
 
 test("prompt composition includes consistency and current shot", () => {

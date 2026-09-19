@@ -162,7 +162,11 @@ function formatBytes(value:number){
 async function postJson(url:string,body:any){
   const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
   const payload=await response.json().catch(()=>({}))
-  if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail?.code||payload?.detail||`HTTP ${response.status}`)
+  if(!response.ok){
+    const code=String(payload?.detail?.code||'').trim()
+    const message=String(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`).trim()
+    throw new Error(code&&message!==code?`${code}: ${message}`:message||code)
+  }
   return payload
 }
 

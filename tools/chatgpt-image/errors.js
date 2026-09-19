@@ -12,5 +12,6 @@ export function safeError(error) {
     ok: false,
     code: error?.code || "IMAGE_WORKER_ERROR",
     message: String(error?.message || error || "Unknown image worker error"),
+    ...(error?.details && typeof error.details === "object" ? { details: error.details } : {}),
   };
 }

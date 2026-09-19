@@ -130,7 +130,18 @@ export class ImageGenerator {
       await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
       const files = await downloadSourcePages(outputDir, input?.sourcePages || []);
       const page = await this.session.getPage(targetUrl);
-      const prepared = await new ChatGPTPage(page, this.config).prepareDraft(prompt, files);
+      let prepared;
+      try {
+        prepared = await new ChatGPTPage(page, this.config).prepareDraft(prompt, files);
+      } catch (error) {
+        error.details = {
+          ...(error?.details || {}),
+          currentUrl: page.url(),
+          sourcePageCount: (input?.sourcePages || []).length,
+          downloadedCount: files.length,
+        };
+        throw error;
+      }
       return {
         ...prepared,
         ok: true,

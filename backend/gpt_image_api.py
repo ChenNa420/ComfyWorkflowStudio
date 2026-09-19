@@ -46,7 +46,7 @@ def gpt_image_router() -> APIRouter:
             else 409 if exc.code in {'FRAME_EXISTS', 'RESULT_REQUIRED'}
             else 400
         )
-        logger.warning("GPT image API failed [%s] %s", exc.code, str(exc))
+        logger.warning("GPT image API failed [%s] %s details=%s", exc.code, str(exc), exc.details or {})
         raise HTTPException(status_code=status, detail={'code': exc.code, 'message': str(exc)}) from exc
 
     @router.get('/status')

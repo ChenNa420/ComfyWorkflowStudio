@@ -32,9 +32,10 @@ def _now() -> str:
 
 
 class GPTImageError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, details: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 class NodeImageWorker:
@@ -105,6 +106,7 @@ class NodeImageWorker:
             raise GPTImageError(
                 str(value.get('code') or 'IMAGE_WORKER_FAILED'),
                 str(value.get('message') or 'ChatGPT image worker failed'),
+                value.get('details') if isinstance(value.get('details'), dict) else None,
             )
         return value
 

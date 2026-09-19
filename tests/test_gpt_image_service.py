@@ -146,6 +146,19 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(kwargs['errors'], 'strict')
         self.assertIn('童语工坊', kwargs['input'])
 
+    def test_node_worker_preserves_safe_prepare_story_diagnostics(self):
+        worker = NodeImageWorker(self.root)
+        fake = SimpleNamespace(
+            stdout='{"ok":false,"code":"CHATGPT_ATTACHMENT_NOT_VISIBLE","message":"missing","details":{"currentUrl":"https://chatgpt.com/g/test","sourcePageCount":3,"downloadedCount":3,"promptBoxFound":true}}\n',
+            returncode=1,
+        )
+        with patch.object(worker, '_node', return_value='node'), patch('backend.gpt_image_service.subprocess.run', return_value=fake):
+            with self.assertRaises(GPTImageError) as context:
+                worker._run('prepare-story', {'prompt': 'demo'}, timeout=5)
+        self.assertEqual(context.exception.code, 'CHATGPT_ATTACHMENT_NOT_VISIBLE')
+        self.assertEqual(context.exception.details['downloadedCount'], 3)
+        self.assertTrue(context.exception.details['promptBoxFound'])
+
     def test_prepares_story_draft_with_selected_source_pages_without_sending(self):
         target = 'https://chatgpt.com/g/test-manual-director'
         result = self.service.prepare_story(self.task_id, 'manual story prompt', target)

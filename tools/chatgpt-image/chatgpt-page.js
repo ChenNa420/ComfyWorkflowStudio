@@ -532,14 +532,14 @@ async function attachmentEvidence(page, filePaths) {
   return { matchedNames, pageMatchedNames, visualCount, pageVisualCount, imageCount, pageImageCount };
 }
 
-function attachmentEvidenceCount(evidence, baseline, expected) {
-  const scopeImageDelta = Math.max(0, evidence.imageCount - Number(baseline?.imageCount || 0));
-  const pageImageDelta = Math.max(0, evidence.pageImageCount - Number(baseline?.pageImageCount || 0));
-  const scopeVisualDelta = Math.max(0, evidence.visualCount - Number(baseline?.visualCount || 0));
-  const pageVisualDelta = Math.max(0, evidence.pageVisualCount - Number(baseline?.pageVisualCount || 0));
+export function attachmentEvidenceCount(baseline, evidence) {
+  const scopeImageDelta = Math.max(0, Number(evidence?.imageCount || 0) - Number(baseline?.imageCount || 0));
+  const pageImageDelta = Math.max(0, Number(evidence?.pageImageCount || 0) - Number(baseline?.pageImageCount || 0));
+  const scopeVisualDelta = Math.max(0, Number(evidence?.visualCount || 0) - Number(baseline?.visualCount || 0));
+  const pageVisualDelta = Math.max(0, Number(evidence?.pageVisualCount || 0) - Number(baseline?.pageVisualCount || 0));
   return Math.max(
-    evidence.matchedNames,
-    evidence.pageMatchedNames,
+    Number(evidence?.matchedNames || 0),
+    Number(evidence?.pageMatchedNames || 0),
     scopeImageDelta,
     pageImageDelta,
     scopeVisualDelta,
@@ -551,7 +551,7 @@ async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const evidence = await attachmentEvidence(page, filePaths);
-    const count = attachmentEvidenceCount(evidence, baseline, filePaths.length);
+    const count = attachmentEvidenceCount(baseline, evidence);
     if (count >= filePaths.length) return count;
     await page.waitForTimeout(350);
   }
@@ -638,6 +638,12 @@ async function uploadFiles(page, filePaths) {
       `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length}). `
         + `url=${page.url()} evidence=${JSON.stringify(finalEvidence || {})}`,
       "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+      {
+        currentUrl: page.url(),
+        sourcePageCount: filePaths.length,
+        attachmentEvidence: finalEvidence,
+        promptBoxFound: Boolean(await page.locator(SELECTORS.prompt).count().catch(() => 0)),
+      },
     );
   }
 
@@ -679,12 +685,15 @@ export class ChatGPTPage {
       }
     }
     await this.page.waitForTimeout(500);
+    const evidence = await attachmentEvidence(this.page, filePaths);
     return {
       ok: true,
       prepared: true,
       sent: false,
       attachmentCount,
       promptLength: String(prompt || "").length,
+      attachmentEvidence: evidence,
+      promptBoxFound: true,
       assistantBaseline: { count: assistantBaseline.count, lastHash: assistantBaseline.lastHash },
       url: this.page.url(),
     };
