@@ -239,6 +239,7 @@ class GPTDirectorStore:
 def build_episode_candidate(task: GPTDirectorTask, result: GPTDirectorResult) -> dict:
     return {
         'schemaVersion': 'gpt-director-1.0',
+        'directorTaskId': task.id,
         'title': result.creativeStory.title,
         'story': result.creativeStory.story or result.creativeStory.summary,
         'style': task.settings.style,

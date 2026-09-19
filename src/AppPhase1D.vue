@@ -62,6 +62,7 @@ const selectedWorkflow = ref<WorkflowSummary | null>(null)
 const selectedAnalysis = ref<Record<string, any> | null>(null)
 const error = ref('')
 const comicEpisode = ref<Record<string, any> | null>(null)
+const comicFrameUrls = ref<Record<string, string>>({})
 
 const kidsNav: NavItem[] = [
   { key: 'dashboard', label: '首页', icon: Home },
@@ -130,6 +131,7 @@ const displayShots = computed(() => {
   return comicEpisode.value.shots.map((shot: any, index: number) => [
     String(shot.id ?? index + 1).padStart(2, '0'), shot.title || `镜头 ${index + 1}`,
     shot.english || shot.chinese || '等待 AI Provider 补充对白', `${shot.duration || 5} 秒`, '待选择', '待完善',
+    comicFrameUrls.value[String(shot.shotId ?? '')] || String(shot.frameUrl || ''),
   ])
 })
 const displayCharacters = computed(() => {
@@ -142,9 +144,36 @@ function navigate(key: string) {
   location.hash = `#/${key}`
 }
 
+async function loadComicFrameUrls() {
+  const taskId = String(
+    comicEpisode.value?.directorTaskId
+    || localStorage.getItem('cws-gpt-director-last-task-id')
+    || '',
+  ).trim()
+  if (!/^gdt-[a-f0-9]{32}$/.test(taskId)) {
+    comicFrameUrls.value = {}
+    return
+  }
+  try {
+    const response = await fetch(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/frames`)
+    if (!response.ok) throw new Error(`Frame HTTP ${response.status}`)
+    const payload = await response.json()
+    const next: Record<string, string> = {}
+    for (const frame of payload.frames || []) {
+      if (frame?.status !== 'IMPORTED' || !frame?.url) continue
+      const version = String(frame.sha256 || frame.generatedAt || '1').slice(0, 12)
+      next[String(frame.shotId)] = `${frame.url}?v=${encodeURIComponent(version)}`
+    }
+    comicFrameUrls.value = next
+  } catch {
+    comicFrameUrls.value = {}
+  }
+}
+
 function onHashChange() {
   activePage.value = location.hash.replace('#/', '') || 'dashboard'
   try { comicEpisode.value = JSON.parse(sessionStorage.getItem('cws-comic-story-episode') || 'null') } catch { comicEpisode.value = null }
+  void loadComicFrameUrls()
 }
 
 async function loadData() {
@@ -223,13 +252,13 @@ onUnmounted(() => {
 
       <template v-else-if="activePage==='storyboard'">
         <section v-if="comicEpisode" class="notice"><b>漫画分镜已载入：</b>{{ comicEpisode.shots?.length || 0 }} Shots · {{ comicEpisode.aspectRatio }} · 来源页 {{ comicEpisode.source?.pages?.join(', ') }}</section>
-        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="shot in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><Image :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary">编辑 Shot</button></div></div></section>
+        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="shot in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary">编辑 Shot</button></div></div></section>
       </template>
 
       <template v-else-if="activePage==='workbench'">
         <section v-if="comicEpisode" class="notice"><b>当前生产来源：</b>{{ comicEpisode.title }} · {{ comicEpisode.shots?.length || 0 }} Shots。空对白和 Prompt 将保持待补充状态。</section>
         <section class="production-steps panel"><div v-for="(step,index) in ['故事创作','分镜设计','首帧生成','视频生成','字幕配音','成片输出']" :key="step" :class="['step',{active:index===3,done:index<3}]"><span>{{ index+1 }}</span><div><b>{{ step }}</b><small>{{ index<3?'已完成':index===3?'ComfyUI 生成':'待处理' }}</small></div></div></section>
-        <section class="workbench-grid"><div class="workbench-main"><section class="project-row"><article class="panel project-card"><span class="eyebrow">当前项目</span><h3>{{ comicEpisode?.title || 'EP003 · 三眼早餐怪兽' }}</h3><div class="tag-row"><span>3–6 岁</span><span>Pre-A1</span><span>6 镜头</span><span>45 秒</span><span>16:9</span></div><p>当前视频阶段默认使用 MiniMax H3，Shot 可以单独覆盖工作流。</p></article><article class="panel progress-card"><div class="ring">50%</div><div><b>3 / 6 完成</b><small>视频生成阶段</small></div></article></section><section class="panel table-panel"><div class="tabs"><button class="active">镜头列表</button><button>批量生成</button><button>ComfyUI 配置</button><button>字幕与配音</button><button>成片预览</button></div><div class="shot-table"><div class="shot-table-head"><span>#</span><span>画面</span><span>镜头描述</span><span>时长</span><span>Workflow</span><span>状态</span><span>操作</span></div><div v-for="shot in displayShots" :key="shot[0]" class="shot-table-row"><b>{{ shot[0] }}</b><div class="thumb"><Image :size="17"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span>{{ shot[4] }}</span><span :class="['status-chip',shot[5]==='已完成'?'success':shot[5]==='生成中'?'running':'neutral']">{{ shot[5] }}</span><button class="secondary">{{ shot[5]==='待生成'?'生成':'查看' }}</button></div></div><div class="table-actions"><button class="secondary">重新生成选中</button><button class="secondary">从当前开始批量生成</button><button class="primary">开始整集生成</button></div></section></div><aside class="workbench-side"><section class="panel section-card"><div class="section-head"><h3>工作流选择</h3><button class="text-button" @click="navigate('workflows')">打开工作流库</button></div><div class="workflow-selected"><div class="workflow-cover"><Film :size="28"/></div><div><b>MiniMax H3 · 首帧转视频</b><p>剧集默认 · Shot04 可单独覆盖</p><div class="tag-row"><span>首帧</span><span>Prompt</span><span>5–10 秒</span></div></div></div><button class="primary wide" @click="navigate('create-task')">打开动态任务表单</button></section><section class="panel section-card"><h3>三级工作流选择</h3><div class="status-list"><div><span>系统默认</span><b>MiniMax H3</b></div><div><span>EP003 默认</span><b>MiniMax H3</b></div><div><span>Shot03 覆盖</span><b>Wan 2.2</b></div><div><span>优先级</span><b>SHOT &gt; EPISODE &gt; SYSTEM</b></div></div></section><section class="panel section-card"><h3>连续性</h3><label class="check-line"><input type="checkbox"/> 使用上一镜头最后一帧</label><div class="notice">成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</div></section></aside></section>
+        <section class="workbench-grid"><div class="workbench-main"><section class="project-row"><article class="panel project-card"><span class="eyebrow">当前项目</span><h3>{{ comicEpisode?.title || 'EP003 · 三眼早餐怪兽' }}</h3><div class="tag-row"><span>3–6 岁</span><span>Pre-A1</span><span>6 镜头</span><span>45 秒</span><span>16:9</span></div><p>当前视频阶段默认使用 MiniMax H3，Shot 可以单独覆盖工作流。</p></article><article class="panel progress-card"><div class="ring">50%</div><div><b>3 / 6 完成</b><small>视频生成阶段</small></div></article></section><section class="panel table-panel"><div class="tabs"><button class="active">镜头列表</button><button>批量生成</button><button>ComfyUI 配置</button><button>字幕与配音</button><button>成片预览</button></div><div class="shot-table"><div class="shot-table-head"><span>#</span><span>画面</span><span>镜头描述</span><span>时长</span><span>Workflow</span><span>状态</span><span>操作</span></div><div v-for="shot in displayShots" :key="shot[0]" class="shot-table-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="17"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span>{{ shot[4] }}</span><span :class="['status-chip',shot[5]==='已完成'?'success':shot[5]==='生成中'?'running':'neutral']">{{ shot[5] }}</span><button class="secondary">{{ shot[5]==='待生成'?'生成':'查看' }}</button></div></div><div class="table-actions"><button class="secondary">重新生成选中</button><button class="secondary">从当前开始批量生成</button><button class="primary">开始整集生成</button></div></section></div><aside class="workbench-side"><section class="panel section-card"><div class="section-head"><h3>工作流选择</h3><button class="text-button" @click="navigate('workflows')">打开工作流库</button></div><div class="workflow-selected"><div class="workflow-cover"><Film :size="28"/></div><div><b>MiniMax H3 · 首帧转视频</b><p>剧集默认 · Shot04 可单独覆盖</p><div class="tag-row"><span>首帧</span><span>Prompt</span><span>5–10 秒</span></div></div></div><button class="primary wide" @click="navigate('create-task')">打开动态任务表单</button></section><section class="panel section-card"><h3>三级工作流选择</h3><div class="status-list"><div><span>系统默认</span><b>MiniMax H3</b></div><div><span>EP003 默认</span><b>MiniMax H3</b></div><div><span>Shot03 覆盖</span><b>Wan 2.2</b></div><div><span>优先级</span><b>SHOT &gt; EPISODE &gt; SYSTEM</b></div></div></section><section class="panel section-card"><h3>连续性</h3><label class="check-line"><input type="checkbox"/> 使用上一镜头最后一帧</label><div class="notice">成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</div></section></aside></section>
       </template>
 
       <template v-else-if="activePage==='kids-works' || activePage==='works'"><OutputGallery/></template>
