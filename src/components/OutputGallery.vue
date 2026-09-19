@@ -103,9 +103,7 @@ async function loadPage(resetPage = false) {
     if (projectFilter.value !== 'all') params.set('project_id', projectFilter.value)
 
     let response = await fetch(`/api/outputs/paged?${params.toString()}`)
-    let legacyFallback = false
     if (response.status === 404) {
-      legacyFallback = true
       response = await fetch('/api/outputs?limit=200')
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
