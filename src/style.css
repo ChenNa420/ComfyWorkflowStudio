@@ -346,3 +346,38 @@
 }
 .workbench-content .wb-project-cover,
 .workbench-content .wb-current-preview{position:relative!important}
+
+/* Workbench V9 — tighten the right-side production columns to the reference.
+   The duration track was visually too wide, making Workflow / Status / Result /
+   Actions feel detached. Keep the left-side composition intact and pull the
+   production controls together with a narrower duration track. */
+.workbench-content .wb-shot-head,
+.workbench-content .wb-shot-row{
+  grid-template-columns:
+    3.4%   /* select */
+    4%     /* # */
+    10.6%  /* frame */
+    24.5%  /* shot info */
+    5%     /* duration */
+    14%    /* workflow */
+    10.5%  /* status */
+    11.5%  /* result */
+    16.5%  /* actions */;
+}
+.workbench-content .wb-shot-head>*,
+.workbench-content .wb-shot-row>*{
+  padding-right:7px;
+}
+.workbench-content .wb-shot-head>span:nth-child(5),
+.workbench-content .wb-shot-row>span:nth-child(5){
+  text-align:center;
+  padding-right:0;
+}
+.workbench-content .wb-shot-row select{
+  max-width:162px;
+}
+.workbench-content .wb-render-status,
+.workbench-content .wb-result-cell,
+.workbench-content .wb-row-actions{
+  padding-left:2px;
+}
