@@ -88,7 +88,7 @@ class Launcher(tk.Tk):
         self._closing = False
 
         self.title(APP_TITLE)
-        self.geometry("690x430")
+        self.geometry("590x326")
         self.resizable(False, False)
         self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -98,44 +98,44 @@ class Launcher(tk.Tk):
 
     def _build_ui(self) -> None:
         header = tk.Frame(self, bg=BG)
-        header.pack(fill="x", padx=22, pady=(15, 8))
-
-        tk.Label(
-            header,
-            text="ComfyWorkflowStudio Launcher",
-            bg=BG,
-            fg=GREEN,
-            font=("Microsoft YaHei UI", 16, "bold"),
-        ).pack(side="left")
+        header.pack(fill="x", padx=14, pady=(8, 5))
 
         tk.Label(
             header,
             text=APP_VERSION,
             bg=BG,
             fg=MUTED,
-            font=("Microsoft YaHei UI", 9),
-        ).pack(side="right", pady=(8, 0))
+            font=("Consolas", 8),
+        ).pack(side="left", padx=(1, 0), pady=(3, 0))
+
+        tk.Label(
+            header,
+            text="ComfyWorkflowStudio Launcher",
+            bg=BG,
+            fg=GREEN,
+            font=("Microsoft YaHei UI", 12, "bold"),
+        ).place(relx=0.5, rely=0.5, anchor="center")
 
         body = tk.Frame(self, bg=BG)
-        body.pack(fill="x", padx=20, pady=(0, 8))
+        body.pack(fill="x", padx=12, pady=(0, 4))
 
         services_outer, services = self._make_column(body, "-- SERVICES --", ORANGE)
         browser_outer, browser = self._make_column(body, "-- BROWSER --", GREEN)
         status_outer, status = self._make_column(body, "-- STATUS --", BLUE)
 
-        services_outer.grid(row=0, column=0, padx=(0, 12), sticky="n")
-        browser_outer.grid(row=0, column=1, padx=12, sticky="n")
-        status_outer.grid(row=0, column=2, padx=(12, 0), sticky="n")
+        services_outer.grid(row=0, column=0, padx=(0, 7), sticky="n")
+        browser_outer.grid(row=0, column=1, padx=7, sticky="n")
+        status_outer.grid(row=0, column=2, padx=(7, 0), sticky="n")
 
-        self._action_button(services, "启动工作台", ORANGE, self.start_workbench).pack(fill="x", pady=4)
-        self._action_button(services, "停止工作台", ORANGE, self.stop_workbench).pack(fill="x", pady=4)
-        self._action_button(services, "重启工作台", ORANGE, self.restart_workbench).pack(fill="x", pady=4)
-        self._action_button(services, "启动 ComfyUI", ORANGE, self.start_comfyui).pack(fill="x", pady=4)
+        self._action_button(services, "启动工作台", ORANGE, self.start_workbench).pack(fill="x", padx=6, pady=3)
+        self._action_button(services, "停止工作台", ORANGE, self.stop_workbench).pack(fill="x", padx=6, pady=3)
+        self._action_button(services, "重启工作台", ORANGE, self.restart_workbench).pack(fill="x", padx=6, pady=3)
+        self._action_button(services, "启动 ComfyUI", ORANGE, self.start_comfyui).pack(fill="x", padx=6, pady=3)
 
-        self._action_button(browser, "打开童语工坊", GREEN, lambda: self.open_url("webUrl")).pack(fill="x", pady=4)
-        self._action_button(browser, "打开 API", GREEN, lambda: self.open_url("apiUrl")).pack(fill="x", pady=4)
-        self._action_button(browser, "打开 ComfyUI", GREEN, lambda: self.open_url("comfyUrl")).pack(fill="x", pady=4)
-        self._action_button(browser, "设置 ComfyUI BAT", GREEN, self.choose_comfy_bat).pack(fill="x", pady=4)
+        self._action_button(browser, "打开童语工坊", GREEN, lambda: self.open_url("webUrl")).pack(fill="x", padx=6, pady=3)
+        self._action_button(browser, "打开 API", GREEN, lambda: self.open_url("apiUrl")).pack(fill="x", padx=6, pady=3)
+        self._action_button(browser, "打开 ComfyUI", GREEN, lambda: self.open_url("comfyUrl")).pack(fill="x", padx=6, pady=3)
+        self._action_button(browser, "设置 ComfyUI BAT", GREEN, self.choose_comfy_bat).pack(fill="x", padx=6, pady=3)
 
         for key, label, port in (
             ("api", "API       8100", 8100),
@@ -145,18 +145,18 @@ class Launcher(tk.Tk):
             ("relay", "Relay     9333", 9333),
         ):
             row = tk.Frame(status, bg=PANEL)
-            row.pack(fill="x", pady=8)
+            row.pack(fill="x", pady=4)
             dot = tk.Label(row, text="●", bg=PANEL, fg=OFFLINE, font=("Consolas", 11, "bold"))
-            dot.pack(side="left", padx=(12, 8))
-            text = tk.Label(row, text=label, bg=PANEL, fg=MUTED, font=("Consolas", 10, "bold"))
+            dot.pack(side="left", padx=(9, 6))
+            text = tk.Label(row, text=label, bg=PANEL, fg=MUTED, font=("Consolas", 8, "bold"))
             text.pack(side="left")
             self.status_labels[key] = dot
 
         sep = tk.Frame(self, bg=BORDER, height=1)
-        sep.pack(fill="x", padx=20, pady=(5, 12))
+        sep.pack(fill="x", padx=12, pady=(3, 7))
 
         folders = tk.Frame(self, bg=BG)
-        folders.pack(fill="x", padx=20)
+        folders.pack(fill="x", padx=10)
         folder_specs = [
             ("Project", ROOT),
             ("Output", ROOT / "storage" / "outputs"),
@@ -166,7 +166,7 @@ class Launcher(tk.Tk):
         ]
         for index, (label, path) in enumerate(folder_specs):
             button = self._action_button(folders, label, FOLDER, lambda p=path: self.open_folder(p), width=13)
-            button.grid(row=0, column=index, padx=5, sticky="ew")
+            button.grid(row=0, column=index, padx=3, sticky="ew")
             folders.grid_columnconfigure(index, weight=1)
 
         self.footer = tk.Label(
@@ -174,22 +174,22 @@ class Launcher(tk.Tk):
             text="桌面快捷方式双击即可打开此面板 · 状态每 3 秒自动刷新",
             bg=BG,
             fg=MUTED,
-            font=("Microsoft YaHei UI", 9),
+            font=("Microsoft YaHei UI", 8),
         )
-        self.footer.pack(fill="x", padx=20, pady=(18, 0))
+        self.footer.pack(fill="x", padx=12, pady=(10, 0))
 
     def _make_column(self, parent: tk.Widget, title: str, accent: str) -> tuple[tk.Frame, tk.Frame]:
-        outer = tk.Frame(parent, bg=BG, width=205)
+        outer = tk.Frame(parent, bg=BG, width=180)
         outer.grid_propagate(False)
-        outer.configure(width=205, height=230)
+        outer.configure(width=180, height=185)
 
         tk.Label(
             outer,
             text=title,
             bg=BG,
             fg=accent,
-            font=("Microsoft YaHei UI", 9, "bold"),
-        ).pack(fill="x", pady=(0, 5))
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(fill="x", pady=(0, 3))
 
         panel = tk.Frame(outer, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
         panel.pack(fill="both", expand=True)
@@ -203,26 +203,29 @@ class Launcher(tk.Tk):
         command,
         width: int = 18,
     ) -> tk.Button:
-        return tk.Button(
+        button = tk.Button(
             parent,
             text=text,
             command=command,
             bg=PANEL,
             fg=accent,
-            activebackground="#18202a",
+            activebackground="#19222d",
             activeforeground=accent,
             relief="flat",
             bd=0,
             highlightthickness=1,
             highlightbackground=accent,
             highlightcolor=accent,
-            font=("Microsoft YaHei UI", 9, "bold"),
+            font=("Microsoft YaHei UI", 8, "bold"),
             cursor="hand2",
             width=width,
             height=1,
-            padx=8,
-            pady=6,
+            padx=5,
+            pady=4,
         )
+        button.bind("<Enter>", lambda _event: button.configure(bg="#18212b"))
+        button.bind("<Leave>", lambda _event: button.configure(bg=PANEL))
+        return button
 
     def _run_powershell(self, script_name: str, wait: bool = False) -> None:
         script = ROOT / script_name
