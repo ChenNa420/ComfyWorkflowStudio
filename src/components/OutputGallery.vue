@@ -104,17 +104,48 @@ async function loadPage(resetPage = false) {
 
     const response = await fetch(`/api/outputs?${params.toString()}`)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const payload = await response.json() as OutputPage
+    const payload = await response.json() as OutputPage | Output[]
     if (serial !== requestSerial) return
 
-    outputs.value = payload.items || []
-    counts.value = payload.counts || { all: payload.total || 0, image: 0, video: 0, audio: 0 }
-    projects.value = payload.projects || []
-    currentPage.value = payload.page || 1
-    pageSize.value = (payload.page_size || pageSize.value) as 8 | 12 | 16
-    total.value = payload.total || 0
-    totalPages.value = payload.total_pages || 0
-    error.value = ''
+    if (Array.isArray(payload)) {
+      // Backward compatibility: an already-running backend may still expose the
+      // pre-pagination /api/outputs shape until the API service is restarted.
+      const legacy = payload
+      const typeFiltered = mediaType.value === 'all'
+        ? legacy
+        : legacy.filter(item => item.type === mediaType.value)
+      const sorted = [...typeFiltered].sort((a, b) => {
+        const left = new Date(a.created_at).getTime() || 0
+        const right = new Date(b.created_at).getTime() || 0
+        return sortMode.value === 'newest' ? right - left : left - right
+      })
+      const start = (currentPage.value - 1) * pageSize.value
+      outputs.value = sorted.slice(start, start + pageSize.value)
+      total.value = sorted.length
+      totalPages.value = Math.ceil(total.value / pageSize.value)
+      counts.value = {
+        all: legacy.length,
+        image: legacy.filter(item => item.type === 'image').length,
+        video: legacy.filter(item => item.type === 'video').length,
+        audio: legacy.filter(item => item.type === 'audio').length,
+      }
+      const map = new Map<string, string>()
+      for (const item of legacy) {
+        const key = item.episode_id || item.project_id || item.workflow_id
+        if (key) map.set(key, item.episode_id || item.project_id || item.workflow_name || item.workflow_id)
+      }
+      projects.value = [...map.entries()].map(([id, label]) => ({ id, label }))
+      error.value = '后端仍在使用旧版作品接口；当前已兼容显示。重启工作台后会自动切换到后端分页。'
+    } else {
+      outputs.value = payload.items || []
+      counts.value = payload.counts || { all: payload.total || 0, image: 0, video: 0, audio: 0 }
+      projects.value = payload.projects || []
+      currentPage.value = payload.page || 1
+      pageSize.value = (payload.page_size || pageSize.value) as 8 | 12 | 16
+      total.value = payload.total || 0
+      totalPages.value = payload.total_pages || 0
+      error.value = ''
+    }
   } catch (value) {
     if (serial !== requestSerial) return
     error.value = value instanceof Error ? value.message : '作品读取失败'
