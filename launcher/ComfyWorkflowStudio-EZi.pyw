@@ -119,14 +119,16 @@ class Launcher(tk.Tk):
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="x", padx=12, pady=(0, 4))
+        for column in range(3):
+            body.grid_columnconfigure(column, weight=1, uniform="launcher_columns")
 
         services_outer, services = self._make_column(body, "-- SERVICES --", ORANGE)
         browser_outer, browser = self._make_column(body, "-- BROWSER --", GREEN)
         status_outer, status = self._make_column(body, "-- STATUS --", BLUE)
 
-        services_outer.grid(row=0, column=0, padx=(0, 7), sticky="n")
-        browser_outer.grid(row=0, column=1, padx=7, sticky="n")
-        status_outer.grid(row=0, column=2, padx=(7, 0), sticky="n")
+        services_outer.grid(row=0, column=0, padx=(0, 5), sticky="nsew")
+        browser_outer.grid(row=0, column=1, padx=5, sticky="nsew")
+        status_outer.grid(row=0, column=2, padx=(5, 0), sticky="nsew")
 
         self._action_button(services, "启动工作台", ORANGE, self.start_workbench).pack(fill="x", padx=6, pady=3)
         self._action_button(services, "停止工作台", ORANGE, self.stop_workbench).pack(fill="x", padx=6, pady=3)
@@ -180,9 +182,9 @@ class Launcher(tk.Tk):
         self.footer.pack(fill="x", padx=12, pady=(7, 0))
 
     def _make_column(self, parent: tk.Widget, title: str, accent: str) -> tuple[tk.Frame, tk.Frame]:
-        outer = tk.Frame(parent, bg=BG, width=180)
+        outer = tk.Frame(parent, bg=BG, height=185)
         outer.grid_propagate(False)
-        outer.configure(width=180, height=185)
+        outer.configure(height=185)
 
         tk.Label(
             outer,
