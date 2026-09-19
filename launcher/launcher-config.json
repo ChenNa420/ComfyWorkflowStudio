@@ -1,0 +1,6 @@
+{
+  "webUrl": "http://127.0.0.1:5174",
+  "apiUrl": "http://127.0.0.1:8100",
+  "comfyUrl": "http://127.0.0.1:8188",
+  "comfyStartBat": ""
+}
