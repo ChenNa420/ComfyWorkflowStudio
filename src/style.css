@@ -317,3 +317,32 @@
   object-fit:cover!important;
   object-position:50% 72%!important;
 }
+
+/* Workbench V8 — make the two large preview crops identical to storyboard.
+   Storyboard uses 52x42. The previous large previews were much wider, so a
+   9:16 source was cropped to a narrow horizontal strip of empty pink sky.
+   Keep the same 52:42 crop ratio at larger sizes. */
+.workbench-content .wb-project-cover{
+  width:185px!important;
+  height:auto!important;
+  aspect-ratio:52/42!important;
+  overflow:hidden!important;
+}
+.workbench-content .wb-current-preview{
+  width:100%!important;
+  height:auto!important;
+  aspect-ratio:52/42!important;
+  overflow:hidden!important;
+}
+.workbench-content .wb-project-cover img,
+.workbench-content .wb-current-preview img{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  object-fit:cover!important;
+  object-position:center center!important;
+  display:block!important;
+}
+.workbench-content .wb-project-cover,
+.workbench-content .wb-current-preview{position:relative!important}
