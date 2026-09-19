@@ -5,7 +5,7 @@ import { ImageWorkerError } from "./errors.js";
 
 const toolRoot = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(toolRoot, "../..");
-export const DEFAULT_CHATGPT_IMAGE_URL = "https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan";
+export const DEFAULT_CHATGPT_IMAGE_URL = "https://chatgpt.com/g/g-6aad4e72baa0819194cfc692ad061ac2-tong-yu-gong-fang-man-hua-zhong-shi-dong-hua-dao-yan";
 export const DEFAULT_CHATGPT_IMAGE_CDP_URL = "http://127.0.0.1:9222";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);

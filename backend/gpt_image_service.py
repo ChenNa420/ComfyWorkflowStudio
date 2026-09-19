@@ -24,7 +24,7 @@ JOB_ID_RE = re.compile(r'^gij-[a-f0-9]{32}$')
 MIME_BY_FORMAT = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp'}
 EXT_BY_MIME = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}
 DEFAULT_CHATGPT_IMAGE_CDP_URL = 'http://127.0.0.1:9222'
-DEFAULT_CHATGPT_IMAGE_GPT_URL = 'https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
+DEFAULT_CHATGPT_IMAGE_GPT_URL = 'https://chatgpt.com/g/g-6aad4e72baa0819194cfc692ad061ac2-tong-yu-gong-fang-man-hua-zhong-shi-dong-hua-dao-yan'
 
 
 def _now() -> str:
@@ -32,9 +32,10 @@ def _now() -> str:
 
 
 class GPTImageError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, details: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 class NodeImageWorker:
@@ -105,6 +106,7 @@ class NodeImageWorker:
             raise GPTImageError(
                 str(value.get('code') or 'IMAGE_WORKER_FAILED'),
                 str(value.get('message') or 'ChatGPT image worker failed'),
+                value.get('details') if isinstance(value.get('details'), dict) else None,
             )
         return value
 
@@ -298,16 +300,21 @@ class GPTImageService:
             raise GPTImageError('STORY_PREP_REQUIRED', 'Prepare the GPT story draft before collecting the result')
 
         target_url = str(gpt_url or prep.get('gptUrl') or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
+        assistant_baseline = {} if use_latest else (prep.get('assistantBaseline') or {})
         collected = self.worker.collect_story({
             'taskId': task_id,
             'gptUrl': target_url,
-            'assistantBaseline': prep.get('assistantBaseline') or {},
+            'assistantBaseline': assistant_baseline,
+            'useLatest': bool(use_latest),
         })
         if bool(collected.get('pending')):
             return {
                 'ok': True,
                 'pending': True,
                 'repaired': False,
+                'reason': collected.get('reason'),
+                'assistantCount': collected.get('assistantCount'),
+                'baselineCount': collected.get('baselineCount'),
                 'taskId': task_id,
                 'status': task.status,
             }
@@ -325,6 +332,7 @@ class GPTImageService:
             'ok': True,
             'pending': False,
             'repaired': bool(collected.get('repaired')),
+            'repairMethod': collected.get('repairMethod'),
             'taskId': task_id,
             'status': completed.status,
             'title': result.creativeStory.title,
@@ -385,8 +393,12 @@ class GPTImageService:
     def _write_frames_map(self, task_id: str, values: dict[str, dict]) -> None:
         self._atomic_write(self._frames_file(task_id), values)
 
-    def create_job(self, task_id: str, shot_id: str, replace: bool = False) -> dict:
+    def create_job(self, task_id: str, shot_id: str, replace: bool = False, gpt_url: str | None = None) -> dict:
         result, shot, shot_index = self._load_result_and_shot(task_id, shot_id)
+        prompt = str(shot.imagePrompt or '').strip()
+        if not prompt:
+            raise GPTImageError('IMAGE_PROMPT_REQUIRED', 'Shot imagePrompt is required for GPT keyframe generation')
+        target_url = str(gpt_url or getattr(self.worker, 'gpt_url', DEFAULT_CHATGPT_IMAGE_GPT_URL)).strip()
         with self._lock:
             frames = self._load_frames_map(task_id)
             if str(shot_id) in frames and not replace:
@@ -407,10 +419,17 @@ class GPTImageService:
             }
             self._atomic_write(self._job_path(job_id), job)
         task = self.director.load_task(task_id)
+        job['gptUrl'] = target_url
+        job['promptMode'] = 'keyframe_task'
+        job['promptLength'] = len(prompt)
+        job['promptSha256'] = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+        self._atomic_write(self._job_path(job_id), job)
         payload = {
             'taskId': task_id,
             'shotId': str(shot_id),
-            'prompt': shot.imagePrompt,
+            'prompt': prompt,
+            'promptMode': 'keyframe_task',
+            'gptUrl': target_url,
             'negativePrompt': shot.negativePrompt,
             'aspectRatio': task.settings.aspectRatio,
             'characterProfile': json.dumps(result.characterDefinitions, ensure_ascii=False)[:4000],

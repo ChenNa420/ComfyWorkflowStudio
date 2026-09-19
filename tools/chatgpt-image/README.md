@@ -33,7 +33,7 @@ storage\chatgpt-image-browser\cdp-profile
 node tools/chatgpt-image/worker.js check
 ```
 
-By default the CDP Chrome opens the project GPT `童语工坊 · AI动画编剧导演`. Override it only when needed with `CWS_CHATGPT_IMAGE_URL`.
+By default the CDP Chrome opens the project GPT `童语工坊 · 漫画忠实动画导演`. Override it only when needed with `CWS_CHATGPT_IMAGE_URL`. The launcher automatically migrates the previous built-in GPT URL to the new faithful-comic GPT.
 
 Expected result includes:
 

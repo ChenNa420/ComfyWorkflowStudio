@@ -130,6 +130,7 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(env['CWS_CHATGPT_IMAGE_CDP_URL'], DEFAULT_CHATGPT_IMAGE_CDP_URL)
         self.assertEqual(env['CWS_CHATGPT_IMAGE_URL'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         self.assertTrue(env['CWS_CHATGPT_IMAGE_URL'].startswith('https://chatgpt.com/g/'))
+        self.assertIn('g-6aad4e72baa0819194cfc692ad061ac2', env['CWS_CHATGPT_IMAGE_URL'])
 
     def test_node_worker_forces_utf8_for_unicode_prompts(self):
         worker = NodeImageWorker(self.root)
@@ -145,6 +146,19 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(kwargs['encoding'], 'utf-8')
         self.assertEqual(kwargs['errors'], 'strict')
         self.assertIn('童语工坊', kwargs['input'])
+
+    def test_node_worker_preserves_safe_prepare_story_diagnostics(self):
+        worker = NodeImageWorker(self.root)
+        fake = SimpleNamespace(
+            stdout='{"ok":false,"code":"CHATGPT_ATTACHMENT_NOT_VISIBLE","message":"missing","details":{"currentUrl":"https://chatgpt.com/g/test","sourcePageCount":3,"downloadedCount":3,"promptBoxFound":true}}\n',
+            returncode=1,
+        )
+        with patch.object(worker, '_node', return_value='node'), patch('backend.gpt_image_service.subprocess.run', return_value=fake):
+            with self.assertRaises(GPTImageError) as context:
+                worker._run('prepare-story', {'prompt': 'demo'}, timeout=5)
+        self.assertEqual(context.exception.code, 'CHATGPT_ATTACHMENT_NOT_VISIBLE')
+        self.assertEqual(context.exception.details['downloadedCount'], 3)
+        self.assertTrue(context.exception.details['promptBoxFound'])
 
     def test_prepares_story_draft_with_selected_source_pages_without_sending(self):
         target = 'https://chatgpt.com/g/test-manual-director'
@@ -182,6 +196,23 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertTrue(value['pending'])
         self.assertEqual(len(self.worker.collect_calls), 1)
         self.assertEqual(self.worker.collect_calls[0]['assistantBaseline']['lastHash'], 'baseline')
+
+    def test_force_latest_ignores_stored_baseline_for_manual_recovery(self):
+        source = GPTDirectorSource(
+            token='token-force-latest',
+            name='comic',
+            filename='force-latest.pdf',
+            pageCount=1,
+            selectedPages=[1],
+            pages=[GPTDirectorPage(ref='P001', page=1, imageUrl='/p1', thumbnailUrl='/p1?t=1')],
+        )
+        task = self.store.create(source, GPTDirectorSettings())
+        self.service.prepare_story(task.id, 'manual story prompt', 'https://chatgpt.com/g/test-manual-director')
+        value = self.service.collect_story(task.id, use_latest=True)
+        self.assertTrue(value['pending'])
+        payload = self.worker.collect_calls[-1]
+        self.assertEqual(payload['assistantBaseline'], {})
+        self.assertTrue(payload['useLatest'])
 
     def test_collect_latest_story_supports_legacy_task_without_prep_state(self):
         source = GPTDirectorSource(
@@ -224,11 +255,13 @@ class GPTImageServiceTests(unittest.TestCase):
             'ok': True,
             'pending': False,
             'repaired': True,
+            'repairMethod': 'local_jsonrepair',
             'result': make_result().model_dump(mode='json'),
         }
         value = self.service.collect_story(task.id)
         self.assertFalse(value['pending'])
         self.assertTrue(value['repaired'])
+        self.assertEqual(value['repairMethod'], 'local_jsonrepair')
         self.assertEqual(value['status'], 'COMPLETED')
         self.assertEqual(value['title'], 'Demo')
         self.assertEqual(value['shotCount'], 1)
@@ -240,9 +273,20 @@ class GPTImageServiceTests(unittest.TestCase):
         completed = self.service.get_job(job['jobId'])
         self.assertEqual(completed['status'], 'COMPLETED')
         self.assertEqual(completed['frame']['shotId'], 'S01')
+        self.assertEqual(completed['promptMode'], 'keyframe_task')
+        self.assertEqual(completed['promptLength'], len('A puppy in a warm kitchen'))
+        self.assertEqual(self.worker.calls[0]['prompt'], 'A puppy in a warm kitchen')
+        self.assertEqual(self.worker.calls[0]['promptMode'], 'keyframe_task')
+        self.assertEqual(self.worker.calls[0]['gptUrl'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         path, record = self.service.frame_file(self.task_id, 'S01')
         self.assertTrue(path.is_file())
         self.assertEqual(record['mime'], 'image/png')
+
+    def test_keyframe_job_can_target_explicit_faithful_gpt(self):
+        target = 'https://chatgpt.com/g/g-6aad4e72baa0819194cfc692ad061ac2-tong-yu-gong-fang-man-hua-zhong-shi-dong-hua-dao-yan'
+        self.service.create_job(self.task_id, 'S01', gpt_url=target)
+        self.assertEqual(self.worker.calls[0]['gptUrl'], target)
+        self.assertEqual(self.worker.calls[0]['promptMode'], 'keyframe_task')
 
     def test_existing_frame_requires_explicit_replace(self):
         self.service.create_job(self.task_id, 'S01')

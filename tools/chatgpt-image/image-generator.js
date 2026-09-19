@@ -55,6 +55,35 @@ async function downloadSourcePages(outputDir, sources) {
 }
 
 export function composeGenerationPrompt(input) {
+  const currentShot = String(input?.prompt || "").trim();
+  if (!currentShot) {
+    throw new ImageWorkerError("Shot image prompt is required", "IMAGE_PROMPT_REQUIRED");
+  }
+
+  // Legacy direct mode is kept for compatibility and still sends the exact
+  // reviewed imagePrompt unchanged.
+  const promptMode = String(input?.promptMode || "").toLowerCase();
+  if (promptMode === "direct") {
+    return currentShot;
+  }
+
+  // The faithful comic GPT uses an explicit task router. Keep the reviewed
+  // imagePrompt verbatim inside a small routing envelope so the same custom GPT
+  // can safely distinguish story JSON generation from single-shot image work.
+  if (promptMode === "keyframe_task") {
+    const sections = ["TASK_MODE: KEYFRAME_IMAGE"];
+    if (String(input?.taskId || "").trim()) sections.push(`Task ID: ${String(input.taskId).trim()}`);
+    if (String(input?.shotId || "").trim()) sections.push(`Shot ID: ${String(input.shotId).trim()}`);
+    if (String(input?.aspectRatio || "").trim()) sections.push(`Aspect ratio: ${String(input.aspectRatio).trim()}`);
+    sections.push(
+      "Generate exactly one standalone keyframe image.",
+      "Use the imagePrompt below as the fixed visual specification. Do not rewrite the story, replace characters, or combine multiple shots.",
+      "[IMAGE PROMPT]",
+      currentShot,
+    );
+    return sections.join("\n\n");
+  }
+
   const sections = [
     "Generate exactly one standalone image from this production brief. Return an image, not a text-only answer.",
   ];
@@ -64,7 +93,7 @@ export function composeGenerationPrompt(input) {
   if (String(input.styleProfile || "").trim()) {
     sections.push(`[Visual style]\n${String(input.styleProfile).trim()}`);
   }
-  sections.push(`[Current shot]\n${String(input.prompt || "").trim()}`);
+  sections.push(`[Current shot]\n${currentShot}`);
   if (String(input.negativePrompt || "").trim()) {
     sections.push(`[Avoid]\n${String(input.negativePrompt).trim()}`);
   }
@@ -118,7 +147,18 @@ export class ImageGenerator {
       await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
       const files = await downloadSourcePages(outputDir, input?.sourcePages || []);
       const page = await this.session.getPage(targetUrl);
-      const prepared = await new ChatGPTPage(page, this.config).prepareDraft(prompt, files);
+      let prepared;
+      try {
+        prepared = await new ChatGPTPage(page, this.config).prepareDraft(prompt, files);
+      } catch (error) {
+        error.details = {
+          ...(error?.details || {}),
+          currentUrl: page.url(),
+          sourcePageCount: (input?.sourcePages || []).length,
+          downloadedCount: files.length,
+        };
+        throw error;
+      }
       return {
         ...prepared,
         ok: true,
@@ -131,9 +171,12 @@ export class ImageGenerator {
 
   collectStory(input) {
     return this.serialize(async () => {
-      validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl));
-      const page = await this.session.getExistingChatGPTPage();
-      const collected = await new ChatGPTPage(page, this.config).collectStory(input?.assistantBaseline || {});
+      const targetUrl = validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl)).toString();
+      const page = await this.session.getExistingChatGPTPage(targetUrl);
+      const collected = await new ChatGPTPage(page, this.config).collectStory(
+        input?.assistantBaseline || {},
+        input?.useLatest === true,
+      );
       return {
         ...collected,
         browserMode: this.session.mode,
@@ -147,7 +190,24 @@ export class ImageGenerator {
       const jobId = randomUUID();
       const outputDir = path.join(this.config.outputDir, jobId);
       await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
-      const page = await this.session.getPage(this.config.chatgptUrl);
+      const targetUrl = validateChatGPTUrl(String(input?.gptUrl || this.config.chatgptUrl)).toString();
+      let page = null;
+      try {
+        const existing = await this.session.getExistingChatGPTPage(targetUrl);
+        const target = new URL(targetUrl);
+        const current = new URL(existing.url());
+        const targetPath = target.pathname.replace(/\/$/, "");
+        const currentPath = current.pathname.replace(/\/$/, "");
+        if (
+          current.hostname.toLowerCase() === target.hostname.toLowerCase()
+          && (currentPath === targetPath || currentPath.startsWith(targetPath + "/"))
+        ) {
+          page = existing;
+        }
+      } catch (error) {
+        if (error?.code !== "CHATGPT_PAGE_NOT_FOUND") throw error;
+      }
+      if (!page) page = await this.session.getPage(targetUrl);
       const candidate = await new ChatGPTPage(page, this.config).generate(prompt);
       const image = await captureImage(page, candidate, outputDir, this.config.maxImageBytes);
       return { ok: true, jobId, promptLength: prompt.length, browserMode: this.session.mode, image };

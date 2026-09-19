@@ -25,6 +25,7 @@ import MaterialsGallery from './components/MaterialsGallery.vue'
 import OutputGallery from './components/OutputGallery.vue'
 import TaskQueuePanel from './components/TaskQueuePanel.vue'
 import WorkflowImportPanel from './components/WorkflowImportPanel.vue'
+import SystemSettingsPanel from './components/SystemSettingsPanel.vue'
 
 defineProps<{ suppressWorkflowPage?: boolean }>()
 
@@ -62,10 +63,30 @@ const selectedWorkflow = ref<WorkflowSummary | null>(null)
 const selectedAnalysis = ref<Record<string, any> | null>(null)
 const error = ref('')
 const comicEpisode = ref<Record<string, any> | null>(null)
+const comicFrameUrls = ref<Record<string, string>>({})
+const editingShotIndex = ref<number | null>(null)
+const shotDraft = ref<Record<string, any> | null>(null)
+const shotEditorMode = ref<'edit' | 'view'>('edit')
+const shotEditorError = ref('')
+const workbenchFilter = ref<'all' | 'pending' | 'running' | 'completed' | 'failed'>('all')
+const workbenchSort = ref<'asc' | 'desc'>('asc')
+const workbenchSelected = ref<number[]>([])
+const workbenchCurrentIndex = ref(0)
+const workbenchDefaultWorkflow = ref('')
+const workbenchResolution = ref('1080 × 1920 (9:16)')
+const workbenchDurationMode = ref('按分镜时长')
+const workbenchSeed = ref('')
+const workbenchUsePreviousFrame = ref(false)
+const workbenchShotWorkflows = ref<Record<string, string>>({})
+const workbenchLibraryReadyWorkflowIds = ref<Record<string, true>>({})
+const workbenchExecutableWorkflowIds = ref<Record<string, true>>({})
+const workbenchReadinessLoaded = ref(false)
+const workbenchReadinessError = ref('')
+const workbenchSettingsNotice = ref('')
+const workbenchHelpOpen = ref(false)
 
 const kidsNav: NavItem[] = [
   { key: 'dashboard', label: '首页', icon: Home },
-  { key: 'story', label: '故事创作', icon: BookOpen },
   { key: 'comic-story', label: '漫画转故事', icon: Sparkles },
   { key: 'characters', label: '角色管理', icon: Users },
   { key: 'storyboard', label: '分镜设计', icon: Film },
@@ -79,8 +100,7 @@ const comfyNav: NavItem[] = [
   { key: 'import', label: '导入工作流', icon: Upload },
   { key: 'adapter', label: '工作流适配', icon: WandSparkles },
   { key: 'create-task', label: '生产运行', icon: Play },
-  { key: 'queue', label: '任务队列', icon: Activity },
-  { key: 'records', label: '生成记录', icon: ListVideo },
+  { key: 'queue', label: '任务中心', icon: Activity },
   { key: 'works', label: '作品库', icon: Image },
   { key: 'materials', label: '素材管理', icon: FolderOpen },
   { key: 'dependencies', label: '模型与节点', icon: Layers3 },
@@ -102,8 +122,8 @@ const titles: Record<string, [string, string]> = {
   import: ['导入工作流', '批量扫描 JSON / ZIP，自动分类、去重并生成 Manifest。'],
   adapter: ['工作流适配', '确认首帧、尾帧、角色参考、Pose、Depth 等输入语义。'],
   'create-task': ['Production Run', '使用通过认证的 Workflow 创建、跟踪和复用生产任务。'],
-  queue: ['任务队列', '实时查看等待、执行、成功、失败和需要确认的任务。'],
-  records: ['生成记录', '追溯任务、Prompt、Workflow 和输出。'],
+  queue: ['任务中心', '统一查看当前任务、历史生成记录、Prompt、Workflow 和输出。'],
+  records: ['任务中心', '统一查看当前任务、历史生成记录、Prompt、Workflow 和输出。'],
   works: ['作品库', '管理由 ComfyWorkflowStudio 生成的图片、视频与音频。'],
   materials: ['素材管理', '角色图、场景图、首帧、Pose、Depth、Mask 与音频。'],
   dependencies: ['模型与节点', '检查工作流要求与当前 ComfyUI 节点环境。'],
@@ -116,6 +136,46 @@ const filteredWorkflows = computed(() => {
   if (!key) return workflows.value
   return workflows.value.filter((item) => `${item.name} ${item.category} ${item.description}`.toLowerCase().includes(key))
 })
+
+const workbenchVideoWorkflows = computed(() => workflows.value.filter((item) => {
+  if (!workbenchLibraryReadyWorkflowIds.value[item.id]) return false
+  const capabilities = (item.capabilities || []).map(value => String(value).toLowerCase())
+  const outputs = (item.outputs || []).map(value => String(value).toLowerCase())
+  const category = String(item.category || '').toLowerCase()
+  return outputs.includes('video')
+    || capabilities.includes('video-generation')
+    || capabilities.includes('image-to-video')
+    || category.includes('video')
+}))
+
+function resolveWorkbenchWorkflowId(value: unknown) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const matched = workbenchVideoWorkflows.value.find(item => item.id === raw || item.name === raw)
+  return matched?.id || ''
+}
+
+function ensureWorkbenchDefaultWorkflow() {
+  const available = workbenchVideoWorkflows.value
+  if (!available.length) {
+    workbenchDefaultWorkflow.value = ''
+    return
+  }
+  if (!available.some(item => item.id === workbenchDefaultWorkflow.value)) {
+    workbenchDefaultWorkflow.value = available[0].id
+  }
+}
+
+function workbenchWorkflowExecutable(workflowId: string) {
+  return Boolean(workbenchExecutableWorkflowIds.value[workflowId])
+}
+
+function workbenchIndicesExecutable(indices: number[]) {
+  return indices.every(index => {
+    const workflowId = workbenchShots.value[index]?.workflow || ''
+    return workflowId && workbenchWorkflowExecutable(workflowId)
+  })
+}
 
 const shots = [
   ['01', '早餐怪兽', 'Benny arranges the pancake.', '7 秒', 'MiniMax H3', '已完成'],
@@ -130,6 +190,7 @@ const displayShots = computed(() => {
   return comicEpisode.value.shots.map((shot: any, index: number) => [
     String(shot.id ?? index + 1).padStart(2, '0'), shot.title || `镜头 ${index + 1}`,
     shot.english || shot.chinese || '等待 AI Provider 补充对白', `${shot.duration || 5} 秒`, '待选择', '待完善',
+    comicFrameUrls.value[String(shot.shotId ?? '')] || String(shot.frameUrl || ''),
   ])
 })
 const displayCharacters = computed(() => {
@@ -137,24 +198,316 @@ const displayCharacters = computed(() => {
   return (comicEpisode.value.characterDefinitions || []).map((role: any) => role.name || role.id)
 })
 
+type WorkbenchShotStatus = 'pending' | 'running' | 'completed' | 'failed'
+type WorkbenchShot = {
+  index:number; shotId:string; id:string; title:string; english:string; chinese:string; duration:number
+  workflow:string; status:WorkbenchShotStatus; frameUrl:string; videoUrl:string; videoPoster:string; generatedAt:string
+}
+
+const workbenchShots = computed<WorkbenchShot[]>(() => {
+  const source = comicEpisode.value?.shots || []
+  return source.map((shot: any, index: number) => {
+    const shotId = String(shot.shotId ?? shot.id ?? index + 1)
+    const raw = String(shot.videoStatus || shot.renderStatus || shot.video?.status || '').toLowerCase()
+    let status: WorkbenchShotStatus = 'pending'
+    if (['running','generating','queued','processing'].includes(raw)) status = 'running'
+    else if (['completed','complete','done','success','succeeded'].includes(raw) || shot.videoUrl || shot.video?.url) status = 'completed'
+    else if (['failed','error'].includes(raw)) status = 'failed'
+    const workflow = workbenchShotWorkflows.value[shotId]
+      || resolveWorkbenchWorkflowId(shot.workflowId || shot.workflow || shot.workflowName)
+      || workbenchDefaultWorkflow.value
+      || workbenchVideoWorkflows.value[0]?.id
+      || ''
+    return {
+      index,
+      shotId,
+      id: String(index + 1).padStart(2, '0'),
+      title: shot.title || `镜头 ${index + 1}`,
+      english: shot.english || '',
+      chinese: shot.chinese || '',
+      duration: Number(shot.duration || 5),
+      workflow,
+      status,
+      frameUrl: comicFrameUrls.value[shotId] || String(shot.frameUrl || ''),
+      videoUrl: String(shot.videoUrl || shot.video?.url || ''),
+      videoPoster: String(shot.videoPoster || shot.video?.poster || ''),
+      generatedAt: String(shot.generatedAt || shot.video?.generatedAt || ''),
+    }
+  })
+})
+
+const workbenchStatusCounts = computed(() => ({
+  all: workbenchShots.value.length,
+  pending: workbenchShots.value.filter(item => item.status === 'pending').length,
+  running: workbenchShots.value.filter(item => item.status === 'running').length,
+  completed: workbenchShots.value.filter(item => item.status === 'completed').length,
+  failed: workbenchShots.value.filter(item => item.status === 'failed').length,
+}))
+
+const filteredWorkbenchShots = computed(() => {
+  const items = workbenchFilter.value === 'all'
+    ? [...workbenchShots.value]
+    : workbenchShots.value.filter(item => item.status === workbenchFilter.value)
+  return workbenchSort.value === 'asc' ? items : items.reverse()
+})
+
+const currentWorkbenchShot = computed(() => workbenchShots.value[workbenchCurrentIndex.value] || workbenchShots.value[0] || null)
+const workbenchCompletedCount = computed(() => workbenchStatusCounts.value.completed)
+const workbenchProgress = computed(() => workbenchShots.value.length
+  ? Math.round((workbenchCompletedCount.value / workbenchShots.value.length) * 100)
+  : 0)
+const workbenchSelectedVisibleAll = computed(() => {
+  const visible = filteredWorkbenchShots.value.map(item => item.index)
+  return visible.length > 0 && visible.every(index => workbenchSelected.value.includes(index))
+})
+
+function inputChecked(event: Event) {
+  return Boolean((event.target as HTMLInputElement | null)?.checked)
+}
+
+function inputValue(event: Event) {
+  return String((event.target as HTMLInputElement | HTMLSelectElement | null)?.value || '')
+}
+
+function setWorkbenchCurrent(index: number) {
+  if (index < 0 || index >= workbenchShots.value.length) return
+  workbenchCurrentIndex.value = index
+}
+
+function toggleWorkbenchShot(index: number, checked: boolean) {
+  const next = new Set(workbenchSelected.value)
+  if (checked) next.add(index)
+  else next.delete(index)
+  workbenchSelected.value = [...next].sort((a, b) => a - b)
+}
+
+function toggleWorkbenchVisible(checked: boolean) {
+  const next = new Set(workbenchSelected.value)
+  for (const item of filteredWorkbenchShots.value) {
+    if (checked) next.add(item.index)
+    else next.delete(item.index)
+  }
+  workbenchSelected.value = [...next].sort((a, b) => a - b)
+}
+
+function setWorkbenchWorkflow(shotId: string, value: string) {
+  workbenchShotWorkflows.value = {...workbenchShotWorkflows.value, [shotId]: value}
+}
+
+function workbenchStatusLabel(status: WorkbenchShotStatus) {
+  if (status === 'completed') return '已完成'
+  if (status === 'running') return '生成中'
+  if (status === 'failed') return '失败'
+  return '待生成'
+}
+
+function queueWorkbenchGeneration(indices: number[], mode: string, replace = false) {
+  if (!workbenchVideoWorkflows.value.length) {
+    error.value = '工作流库中没有标记为“可直接使用”的视频工作流。'
+    return
+  }
+  const unique = [...new Set(indices)].filter(index => index >= 0 && index < workbenchShots.value.length)
+  const blocked = unique.filter(index => {
+    const workflowId = workbenchShots.value[index]?.workflow || ''
+    return !workflowId || !workbenchWorkflowExecutable(workflowId)
+  })
+  if (blocked.length) {
+    error.value = workbenchReadinessError.value
+      || `镜头 ${blocked.map(index => String(index + 1).padStart(2, '0')).join('、')} 选择的工作流尚未通过 CERTIFIED + READY Runtime 认证。`
+    return
+  }
+  if (!unique.length) {
+    error.value = '请先选择至少一个镜头。'
+    return
+  }
+  const request = {
+    episodeTitle: comicEpisode.value?.title || '',
+    directorTaskId: comicEpisode.value?.directorTaskId || localStorage.getItem('cws-gpt-director-last-task-id') || '',
+    mode,
+    replace,
+    workflow: workbenchDefaultWorkflow.value || workbenchVideoWorkflows.value[0]?.id || '',
+    resolution: workbenchResolution.value,
+    durationMode: workbenchDurationMode.value,
+    seed: workbenchSeed.value.trim() || null,
+    usePreviousLastFrame: workbenchUsePreviousFrame.value,
+    shots: unique.map(index => {
+      const shot = comicEpisode.value?.shots?.[index] || {}
+      const wb = workbenchShots.value[index]
+      return {
+        index,
+        shotId: wb?.shotId || String(shot.shotId || ''),
+        workflow: wb?.workflow || workbenchDefaultWorkflow.value || workbenchVideoWorkflows.value[0]?.id || '',
+        frameUrl: wb?.frameUrl || '',
+        videoPrompt: shot.videoPrompt || '',
+        negativePrompt: shot.negativePrompt || '',
+        duration: Number(shot.duration || 5),
+      }
+    }),
+  }
+  sessionStorage.setItem('cws-workbench-generation-request', JSON.stringify(request))
+  sessionStorage.setItem('cws-workbench-return-page', 'workbench')
+  error.value = ''
+  navigate('create-task')
+}
+
+function regenerateSelectedWorkbench() {
+  queueWorkbenchGeneration(workbenchSelected.value, 'regenerate-selected', true)
+}
+
+function generateFromCurrentWorkbench() {
+  queueWorkbenchGeneration(
+    workbenchShots.value.map(item => item.index).filter(index => index >= workbenchCurrentIndex.value),
+    'from-current',
+    false,
+  )
+}
+
+function generateWholeWorkbench() {
+  queueWorkbenchGeneration(workbenchShots.value.map(item => item.index), 'whole-episode', false)
+}
+
+function generateSingleWorkbench(index: number) {
+  setWorkbenchCurrent(index)
+  queueWorkbenchGeneration([index], 'single-shot', false)
+}
+
+function openShotEditor(index: number, mode: 'edit' | 'view' = 'edit') {
+  const shot = comicEpisode.value?.shots?.[index]
+  if (!shot) {
+    error.value = '当前镜头没有可用的漫画 Episode 数据。'
+    return
+  }
+  editingShotIndex.value = index
+  shotEditorMode.value = mode
+  shotEditorError.value = ''
+  shotDraft.value = JSON.parse(JSON.stringify(shot))
+}
+
+function closeShotEditor() {
+  editingShotIndex.value = null
+  shotDraft.value = null
+  shotEditorMode.value = 'edit'
+  shotEditorError.value = ''
+}
+
+function saveShotEditor() {
+  if (editingShotIndex.value === null || !shotDraft.value || !comicEpisode.value?.shots?.length) return
+  const duration = Number(shotDraft.value.duration)
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 10) {
+    shotEditorError.value = '镜头时长必须大于 0 且不超过 10 秒。'
+    return
+  }
+  if (!String(shotDraft.value.imagePrompt || '').trim()) {
+    shotEditorError.value = 'Image Prompt 不能为空。'
+    return
+  }
+  if (!String(shotDraft.value.videoPrompt || '').trim()) {
+    shotEditorError.value = 'Video Prompt 不能为空。'
+    return
+  }
+  const shots = [...comicEpisode.value.shots]
+  shots[editingShotIndex.value] = {
+    ...shots[editingShotIndex.value],
+    ...shotDraft.value,
+    duration,
+  }
+  comicEpisode.value = {...comicEpisode.value, shots}
+  sessionStorage.setItem('cws-comic-story-episode', JSON.stringify(comicEpisode.value))
+  closeShotEditor()
+}
+
 function navigate(key: string) {
   activePage.value = key
   location.hash = `#/${key}`
 }
 
+async function loadComicFrameUrls() {
+  const taskId = String(
+    comicEpisode.value?.directorTaskId
+    || localStorage.getItem('cws-gpt-director-last-task-id')
+    || '',
+  ).trim()
+  if (!/^gdt-[a-f0-9]{32}$/.test(taskId)) {
+    comicFrameUrls.value = {}
+    return
+  }
+  try {
+    const response = await fetch(`/api/gpt-image/tasks/${encodeURIComponent(taskId)}/frames`)
+    if (!response.ok) throw new Error(`Frame HTTP ${response.status}`)
+    const payload = await response.json()
+    const next: Record<string, string> = {}
+    for (const frame of payload.frames || []) {
+      if (frame?.status !== 'IMPORTED' || !frame?.url) continue
+      const version = String(frame.sha256 || frame.generatedAt || '1').slice(0, 12)
+      next[String(frame.shotId)] = `${frame.url}?v=${encodeURIComponent(version)}`
+    }
+    comicFrameUrls.value = next
+  } catch {
+    comicFrameUrls.value = {}
+  }
+}
+
 function onHashChange() {
   activePage.value = location.hash.replace('#/', '') || 'dashboard'
   try { comicEpisode.value = JSON.parse(sessionStorage.getItem('cws-comic-story-episode') || 'null') } catch { comicEpisode.value = null }
+  void loadComicFrameUrls()
 }
 
 async function loadData() {
   try {
-    const [healthResponse, workflowResponse] = await Promise.all([fetch('/api/health'), fetch('/api/workflows')])
+    const [healthResponse, workflowResponse, knowledgeResponse, preflightResponse, settingsResponse] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/workflows'),
+      fetch('/api/workflow-knowledge?health=READY&limit=1000'),
+      fetch('/api/readiness/preflight?certifiedOnly=true&limit=1000'),
+      fetch('/api/settings'),
+    ])
     if (!healthResponse.ok) throw new Error(`Health HTTP ${healthResponse.status}`)
     health.value = await healthResponse.json()
     workflows.value = workflowResponse.ok ? await workflowResponse.json() : []
+
+    const libraryReady: Record<string, true> = {}
+    if (knowledgeResponse.ok) {
+      for (const item of await knowledgeResponse.json()) {
+        if (item?.id) libraryReady[String(item.id)] = true
+      }
+    }
+    workbenchLibraryReadyWorkflowIds.value = libraryReady
+
+    workbenchExecutableWorkflowIds.value = {}
+    workbenchReadinessLoaded.value = true
+    workbenchReadinessError.value = ''
+    if (preflightResponse.ok) {
+      const preflight = await preflightResponse.json()
+      const executable: Record<string, true> = {}
+      for (const item of preflight.items || []) {
+        if (item?.status === 'CERTIFIED' && item?.dependencyStatus === 'READY' && item?.workflowId) {
+          executable[String(item.workflowId)] = true
+        }
+      }
+      workbenchExecutableWorkflowIds.value = executable
+      if (!preflight.connected) {
+        workbenchReadinessError.value = 'ComfyUI 当前离线：可以选择工作流，但暂时不能提交视频生成。'
+      }
+    } else {
+      workbenchReadinessError.value = `Runtime 预检读取失败：HTTP ${preflightResponse.status}`
+    }
+
+    const appSettings = settingsResponse.ok ? await settingsResponse.json() : null
+    const preferred = String(appSettings?.workflow?.productionVideoWorkflowId || appSettings?.workflow?.defaultVideoWorkflowId || '')
+    workbenchSettingsNotice.value = ''
+    if (preferred && workbenchVideoWorkflows.value.some(item => item.id === preferred)) {
+      workbenchDefaultWorkflow.value = preferred
+    } else {
+      ensureWorkbenchDefaultWorkflow()
+      if (preferred) workbenchSettingsNotice.value = '设置中的默认视频工作流已失效，已安全回退到第一个可用工作流。'
+    }
     error.value = ''
   } catch (value) {
+    workbenchReadinessLoaded.value = true
+    workbenchLibraryReadyWorkflowIds.value = {}
+    workbenchExecutableWorkflowIds.value = {}
+    workbenchReadinessError.value = value instanceof Error ? value.message : '无法读取 Runtime 预检状态'
     error.value = value instanceof Error ? value.message : '无法连接本地 API'
   }
 }
@@ -178,6 +531,7 @@ function onCatalogUpdated() { loadData() }
 onMounted(() => {
   window.addEventListener('hashchange', onHashChange)
   window.addEventListener('workflow-catalog-updated', onCatalogUpdated)
+  window.addEventListener('system-settings-updated', onCatalogUpdated)
   loadData()
   onHashChange()
 })
@@ -185,6 +539,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('hashchange', onHashChange)
   window.removeEventListener('workflow-catalog-updated', onCatalogUpdated)
+  window.removeEventListener('system-settings-updated', onCatalogUpdated)
 })
 </script>
 
@@ -200,8 +555,24 @@ onUnmounted(() => {
       <div class="sidebar-footer"><span class="dot" :class="health?.status==='ok'?'ok':''"></span><div><strong>Local Studio</strong><small>{{ health?.status==='ok'?'API 已连接':'等待连接' }}</small></div></div>
     </aside>
 
-    <main class="content">
-      <header class="topbar"><div><p class="eyebrow">COMFY WORKFLOW STUDIO</p><h1>{{ currentTitle[0] }}</h1><span>{{ currentTitle[1] }}</span></div><div class="top-actions"><div class="top-search"><Search :size="15"/><input placeholder="搜索工作流、模型、作品..."/></div><div class="status-pill"><span class="dot" :class="health?.comfyUi==='connected'?'ok':''"></span>Phase {{ health?.phase || '1D' }}</div></div></header>
+    <main :class="['content',{ 'workbench-content':activePage==='workbench' }]">
+      <header v-if="activePage!=='workbench'" class="topbar"><div><p class="eyebrow">COMFY WORKFLOW STUDIO</p><h1>{{ currentTitle[0] }}</h1><span>{{ currentTitle[1] }}</span></div><div class="top-actions"><div class="top-search"><Search :size="15"/><input placeholder="搜索工作流、模型、作品..."/></div><div class="status-pill"><span class="dot" :class="health?.comfyUi==='connected'?'ok':''"></span>Phase {{ health?.phase || '1D' }}</div></div></header>
+      <header v-else class="wb-header">
+        <div>
+          <div class="wb-breadcrumbs"><span>首页</span><i>›</i><span>项目</span><i>›</i><span>{{ comicEpisode?.title || '当前项目' }}</span><i>›</i><b>成片工作台</b></div>
+          <h1>成片工作台</h1>
+          <p>将分镜生成完整动画视频，支持单镜头、批量和整集生成。</p>
+        </div>
+        <div class="wb-header-actions">
+          <button class="secondary" @click="navigate('settings')"><Settings :size="15"/>项目设置</button>
+          <button class="secondary" @click="workbenchHelpOpen=!workbenchHelpOpen">使用帮助</button>
+          <button class="primary" @click="navigate('publish')"><Upload :size="15"/>导出成片</button>
+        </div>
+        <div v-if="workbenchHelpOpen" class="wb-help-popover">
+          <b>成片工作台</b>
+          <p>先选择镜头与工作流，再通过单镜头、批量或整集入口创建生产任务。关键帧和 Video Prompt 会一起带入动态任务表单。</p>
+        </div>
+      </header>
 
       <template v-if="activePage==='dashboard'">
         <section class="hero panel compact-hero"><div><span class="badge">Kids English Animation + Comfy Workflow Center</span><h2>从故事到成片，再到任意 ComfyUI 工作流。</h2><p>童语工坊负责故事、角色、分镜与成片；Comfy 工作流中心负责 Workflow Knowledge Base、生成任务、依赖和作品。</p><div class="hero-actions"><button class="primary" @click="navigate('workbench')">继续制作 EP003</button><button class="secondary" @click="navigate('workflows')">浏览工作流</button></div></div><div class="hero-card"><span>当前工作流库</span><strong>{{ health?.workflowPackages ?? 0 }}</strong><small>Workflow Packages</small><div class="mini-row"><span>FastAPI</span><b>8100</b></div><div class="mini-row"><span>Vue/Vite</span><b>5174</b></div><div class="mini-row"><span>ComfyUI</span><b>{{ health?.comfyUi || '检测中' }}</b></div></div></section>
@@ -223,13 +594,142 @@ onUnmounted(() => {
 
       <template v-else-if="activePage==='storyboard'">
         <section v-if="comicEpisode" class="notice"><b>漫画分镜已载入：</b>{{ comicEpisode.shots?.length || 0 }} Shots · {{ comicEpisode.aspectRatio }} · 来源页 {{ comicEpisode.source?.pages?.join(', ') }}</section>
-        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="shot in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><Image :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary">编辑 Shot</button></div></div></section>
+        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="(shot,index) in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary" @click="openShotEditor(index)">编辑 Shot</button></div></div></section>
       </template>
 
       <template v-else-if="activePage==='workbench'">
-        <section v-if="comicEpisode" class="notice"><b>当前生产来源：</b>{{ comicEpisode.title }} · {{ comicEpisode.shots?.length || 0 }} Shots。空对白和 Prompt 将保持待补充状态。</section>
-        <section class="production-steps panel"><div v-for="(step,index) in ['故事创作','分镜设计','首帧生成','视频生成','字幕配音','成片输出']" :key="step" :class="['step',{active:index===3,done:index<3}]"><span>{{ index+1 }}</span><div><b>{{ step }}</b><small>{{ index<3?'已完成':index===3?'ComfyUI 生成':'待处理' }}</small></div></div></section>
-        <section class="workbench-grid"><div class="workbench-main"><section class="project-row"><article class="panel project-card"><span class="eyebrow">当前项目</span><h3>{{ comicEpisode?.title || 'EP003 · 三眼早餐怪兽' }}</h3><div class="tag-row"><span>3–6 岁</span><span>Pre-A1</span><span>6 镜头</span><span>45 秒</span><span>16:9</span></div><p>当前视频阶段默认使用 MiniMax H3，Shot 可以单独覆盖工作流。</p></article><article class="panel progress-card"><div class="ring">50%</div><div><b>3 / 6 完成</b><small>视频生成阶段</small></div></article></section><section class="panel table-panel"><div class="tabs"><button class="active">镜头列表</button><button>批量生成</button><button>ComfyUI 配置</button><button>字幕与配音</button><button>成片预览</button></div><div class="shot-table"><div class="shot-table-head"><span>#</span><span>画面</span><span>镜头描述</span><span>时长</span><span>Workflow</span><span>状态</span><span>操作</span></div><div v-for="shot in displayShots" :key="shot[0]" class="shot-table-row"><b>{{ shot[0] }}</b><div class="thumb"><Image :size="17"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span>{{ shot[4] }}</span><span :class="['status-chip',shot[5]==='已完成'?'success':shot[5]==='生成中'?'running':'neutral']">{{ shot[5] }}</span><button class="secondary">{{ shot[5]==='待生成'?'生成':'查看' }}</button></div></div><div class="table-actions"><button class="secondary">重新生成选中</button><button class="secondary">从当前开始批量生成</button><button class="primary">开始整集生成</button></div></section></div><aside class="workbench-side"><section class="panel section-card"><div class="section-head"><h3>工作流选择</h3><button class="text-button" @click="navigate('workflows')">打开工作流库</button></div><div class="workflow-selected"><div class="workflow-cover"><Film :size="28"/></div><div><b>MiniMax H3 · 首帧转视频</b><p>剧集默认 · Shot04 可单独覆盖</p><div class="tag-row"><span>首帧</span><span>Prompt</span><span>5–10 秒</span></div></div></div><button class="primary wide" @click="navigate('create-task')">打开动态任务表单</button></section><section class="panel section-card"><h3>三级工作流选择</h3><div class="status-list"><div><span>系统默认</span><b>MiniMax H3</b></div><div><span>EP003 默认</span><b>MiniMax H3</b></div><div><span>Shot03 覆盖</span><b>Wan 2.2</b></div><div><span>优先级</span><b>SHOT &gt; EPISODE &gt; SYSTEM</b></div></div></section><section class="panel section-card"><h3>连续性</h3><label class="check-line"><input type="checkbox"/> 使用上一镜头最后一帧</label><div class="notice">成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</div></section></aside></section>
+        <section class="wb-steps panel">
+          <div v-for="(step,index) in ['故事创作','分镜设计','首帧生成','视频生成','字幕配音','成片输出']" :key="step" :class="['wb-step',{active:index===3,done:index<3}]">
+            <span>{{ index<3?'✓':index+1 }}</span>
+            <div><b>{{ step }}</b><small>{{ index<3?'已完成':index===3?'进行中':'待处理' }}</small></div>
+            <i v-if="index<5">→</i>
+          </div>
+        </section>
+
+        <section class="wb-layout">
+          <div class="wb-main">
+            <section class="panel wb-project-card">
+              <div class="wb-project-cover">
+                <img v-if="workbenchShots[0]?.frameUrl" :src="workbenchShots[0].frameUrl" alt="项目关键帧"/>
+                <Image v-else :size="36"/>
+              </div>
+              <div class="wb-project-copy">
+                <span class="eyebrow">当前项目</span>
+                <h2>{{ comicEpisode?.title || '当前漫画项目' }}</h2>
+                <div class="wb-meta">
+                  <span>{{ comicEpisode?.audience || '3–6 岁' }}</span>
+                  <span>{{ comicEpisode?.level || 'Pre-A1' }}</span>
+                  <span>{{ workbenchShots.length }} 镜头</span>
+                  <span>{{ comicEpisode?.duration || workbenchShots.reduce((sum,item)=>sum+item.duration,0) }} 秒</span>
+                  <span>{{ comicEpisode?.aspectRatio || '9:16' }}</span>
+                  <em>漫画改编</em>
+                </div>
+                <p>{{ comicEpisode?.story || '当前视频阶段使用已确认关键帧与 Video Prompt，Shot 可以单独覆盖工作流。' }}</p>
+              </div>
+              <div class="wb-project-progress">
+                <div class="wb-ring" :style="{'--progress':workbenchProgress+'%'}"><b>{{ workbenchProgress }}%</b></div>
+                <div><strong>{{ workbenchCompletedCount }} / {{ workbenchShots.length }} 完成</strong><small>视频生成阶段</small></div>
+              </div>
+            </section>
+
+            <section class="panel wb-shot-card">
+              <div class="wb-shot-toolbar">
+                <div>
+                  <h3>镜头列表 ({{ workbenchShots.length }})</h3>
+                  <div class="wb-filter-tabs">
+                    <button :class="{active:workbenchFilter==='all'}" @click="workbenchFilter='all'">全部 {{ workbenchStatusCounts.all }}</button>
+                    <button :class="{active:workbenchFilter==='pending'}" @click="workbenchFilter='pending'">待生成 {{ workbenchStatusCounts.pending }}</button>
+                    <button :class="{active:workbenchFilter==='running'}" @click="workbenchFilter='running'">生成中 {{ workbenchStatusCounts.running }}</button>
+                    <button :class="{active:workbenchFilter==='completed'}" @click="workbenchFilter='completed'">已完成 {{ workbenchStatusCounts.completed }}</button>
+                    <button :class="{active:workbenchFilter==='failed'}" @click="workbenchFilter='failed'">失败 {{ workbenchStatusCounts.failed }}</button>
+                  </div>
+                </div>
+                <button class="secondary small" @click="workbenchSort=workbenchSort==='asc'?'desc':'asc'">镜头顺序 {{ workbenchSort==='asc'?'↑':'↓' }}</button>
+              </div>
+
+              <div class="wb-shot-table">
+                <div class="wb-shot-head">
+                  <label><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(inputChecked($event))"/></label>
+                  <span>#</span><span>画面</span><span>镜头信息</span><span>时长</span><span>工作流</span><span>状态</span><span>生成结果</span><span>操作</span>
+                </div>
+                <div v-for="item in filteredWorkbenchShots" :key="item.shotId" :class="['wb-shot-row',{current:item.index===workbenchCurrentIndex}]" @click="setWorkbenchCurrent(item.index)">
+                  <label @click.stop><input type="checkbox" :checked="workbenchSelected.includes(item.index)" @change="toggleWorkbenchShot(item.index,inputChecked($event))"/></label>
+                  <b>{{ item.id }}</b>
+                  <div class="wb-shot-thumb"><img v-if="item.frameUrl" :src="item.frameUrl" :alt="`Shot ${item.id}`"/><Image v-else :size="18"/></div>
+                  <div class="wb-shot-copy">
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.english || item.chinese || '无对白' }}</small>
+                    <button @click.stop="openShotEditor(item.index,'edit')">编辑 Prompt ↗</button>
+                  </div>
+                  <span>{{ item.duration }} 秒</span>
+                  <select :value="item.workflow" :disabled="!workbenchVideoWorkflows.length" @click.stop @change="setWorkbenchWorkflow(item.shotId,inputValue($event))">
+                    <option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option>
+                    <option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option>
+                  </select>
+                  <div :class="['wb-render-status',item.status]"><i></i><span>{{ workbenchStatusLabel(item.status) }}</span></div>
+                  <div class="wb-result-cell">
+                    <template v-if="item.status==='completed'">
+                      <div class="wb-video-thumb"><img :src="item.videoPoster||item.frameUrl"/><span>▶</span></div>
+                    </template>
+                    <template v-else>—</template>
+                  </div>
+                  <div class="wb-row-actions">
+                    <button v-if="item.status==='pending'||item.status==='failed'" class="wb-generate-btn" :disabled="!item.workflow || !workbenchWorkflowExecutable(item.workflow)" @click.stop="generateSingleWorkbench(item.index)">立即生成</button>
+                    <button class="secondary small" @click.stop="openShotEditor(item.index,'view')">查看</button>
+                    
+                  </div>
+                </div>
+              </div>
+
+              <div class="wb-batch-bar">
+                <div><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(inputChecked($event))"/><b>已选择 {{ workbenchSelected.length }} 个镜头</b></div>
+                <div>
+                  <button class="secondary" :disabled="!workbenchSelected.length || !workbenchIndicesExecutable(workbenchSelected)" @click="regenerateSelectedWorkbench">↻ 重新生成选中</button>
+                  <button class="secondary" :disabled="!workbenchShots.length || !workbenchIndicesExecutable(workbenchShots.map(item=>item.index).filter(index=>index>=workbenchCurrentIndex))" @click="generateFromCurrentWorkbench">▶ 从当前开始批量生成</button>
+                  <button class="primary" :disabled="!workbenchShots.length || !workbenchIndicesExecutable(workbenchShots.map(item=>item.index))" @click="generateWholeWorkbench">✦ 开始整集生成</button>
+                  <button class="secondary" disabled>停止生成</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="wb-side">
+            <section class="panel wb-side-card wb-preview-card">
+              <h3>当前镜头预览</h3>
+              <div class="wb-current-preview">
+                <img v-if="currentWorkbenchShot?.frameUrl" :src="currentWorkbenchShot.frameUrl" alt="当前镜头关键帧"/>
+                <Image v-else :size="36"/>
+              </div>
+              <b>{{ currentWorkbenchShot?.id }}. {{ currentWorkbenchShot?.title || '请选择镜头' }}</b>
+              <small>{{ currentWorkbenchShot?.english || currentWorkbenchShot?.chinese || '—' }}</small>
+            </section>
+
+            <section class="panel wb-side-card wb-settings-card">
+              <h3>生成设置</h3>
+              <label>视频工作流<select v-model="workbenchDefaultWorkflow" :disabled="!workbenchVideoWorkflows.length"><option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option><option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
+              <small :class="['wb-workflow-gate',{error:!!workbenchReadinessError}]">
+                {{ workbenchReadinessError || workbenchSettingsNotice || (workbenchReadinessLoaded ? `工作流库可用视频工作流 ${workbenchVideoWorkflows.length} 个 · 可执行 ${Object.keys(workbenchExecutableWorkflowIds).filter(id=>workbenchVideoWorkflows.some(w=>w.id===id)).length} 个` : '正在读取工作流状态…') }}
+              </small>
+              <label>分辨率<select v-model="workbenchResolution"><option>1080 × 1920 (9:16)</option><option>1920 × 1080 (16:9)</option><option>720 × 1280 (9:16)</option></select></label>
+              <label>生成时长<select v-model="workbenchDurationMode"><option>按分镜时长</option><option>统一 5 秒</option><option>统一 10 秒</option></select></label>
+              <label>随机种子（可选）<input v-model="workbenchSeed" placeholder="不填则随机"/></label>
+              <details><summary>高级参数⌄</summary><label class="wb-advanced-check"><input v-model="workbenchUsePreviousFrame" type="checkbox"/> 使用上一镜头最后一帧</label><p>高级参数将在动态任务表单中继续配置；成功镜头默认不自动重新生成。</p></details>
+            </section>
+
+            <section class="panel wb-side-card wb-progress-card">
+              <div class="wb-progress-head"><h3>生成进度</h3><b>{{ workbenchProgress }}%</b></div>
+              <div class="wb-progress-line"><i :style="{width:workbenchProgress+'%'}"></i></div>
+              <div class="wb-progress-list">
+                <div v-for="item in workbenchShots" :key="item.shotId">
+                  <span :class="['wb-progress-dot',item.status]">{{ item.status==='completed'?'✓':item.status==='running'?'•':'+' }}</span>
+                  <p>镜头 {{ item.id }} {{ workbenchStatusLabel(item.status) }}</p>
+                  <small>{{ item.generatedAt ? item.generatedAt.slice(11,16) : item.status==='completed'?'完成':'—' }}</small>
+                </div>
+              </div>
+            </section>
+
+          </aside>
+        </section>
       </template>
 
       <template v-else-if="activePage==='kids-works' || activePage==='works'"><OutputGallery/></template>
@@ -265,10 +765,57 @@ onUnmounted(() => {
       </template>
 
       <template v-else-if="activePage==='settings'">
-        <section class="settings-layout"><aside class="panel settings-menu"><button class="active">ComfyUI</button><button>存储</button><button>任务策略</button><button>工作流</button><button>高级</button></aside><article class="panel form-panel"><h3>ComfyUI 连接</h3><label>地址<input value="http://127.0.0.1:8188"/></label><div class="connection-card"><span class="dot" :class="health?.comfyUi==='connected'?'ok':''"></span><div><b>{{ health?.comfyUi==='connected'?'当前可连接':'当前不可连接' }}</b><small>默认从 COMFYUI_URL 读取，未配置时使用 127.0.0.1:8188。</small></div></div><h3>安全执行策略</h3><div class="form-grid"><label>最大并发<select><option>1 · 串行</option></select></label><label>输出超时<input value="900 秒"/></label></div><label class="check-line disabled"><input type="checkbox" disabled/> UNKNOWN 自动重试（强制禁止）</label><div class="notice">发生提交后网络异常时，如果无法确定 ComfyUI 是否已接收任务，状态标记为 UNKNOWN / NEEDS_REVIEW，不会自动重复提交。</div></article></section>
+        <SystemSettingsPanel/>
       </template>
 
       <p v-else class="panel empty-page">页面正在接入真实数据。</p>
+
+      <div v-if="shotDraft && editingShotIndex !== null" class="shot-editor-overlay" @click.self="closeShotEditor">
+        <section class="shot-editor-panel" role="dialog" aria-modal="true" :aria-label="shotEditorMode==='view'?'查看 Shot':'编辑 Shot'">
+          <header class="shot-editor-head">
+            <div>
+              <span class="eyebrow">{{ shotEditorMode==='view'?'SHOT DETAIL':'SHOT EDITOR' }}</span>
+              <h3>{{ shotEditorMode==='view'?'查看':'编辑' }} Shot {{ String((editingShotIndex ?? 0) + 1).padStart(2, '0') }}</h3>
+              <p v-if="shotEditorMode==='view'">查看当前关键帧、对白和 Prompt；需要修改时可切换到编辑模式。</p>
+              <p v-else>修改会同步到当前漫画 Episode，并用于后续成片工作台；已生成关键帧不会自动重生。</p>
+            </div>
+            <button class="secondary small" @click="closeShotEditor">关闭</button>
+          </header>
+
+          <div class="shot-editor-body">
+            <aside class="shot-editor-preview">
+              <div class="shot-editor-frame">
+                <img v-if="comicFrameUrls[String(shotDraft.shotId || '')]" :src="comicFrameUrls[String(shotDraft.shotId || '')]" alt="当前关键帧"/>
+                <Image v-else :size="30"/>
+              </div>
+              <small>当前关键帧预览</small>
+            </aside>
+
+            <div class="shot-editor-form">
+              <div class="shot-editor-grid">
+                <label>标题<input v-model="shotDraft.title" :disabled="shotEditorMode==='view'"/></label>
+                <label>时长（秒）<input v-model.number="shotDraft.duration" type="number" min="0.1" max="10" step="0.5" :disabled="shotEditorMode==='view'"/></label>
+                <label>说话人<input v-model="shotDraft.speaker" placeholder="无对白可留空" :disabled="shotEditorMode==='view'"/></label>
+                <label>Shot ID<input :value="shotDraft.shotId" disabled/></label>
+              </div>
+              <label>英文对白<textarea v-model="shotDraft.english" rows="2" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>中文对白<textarea v-model="shotDraft.chinese" rows="2" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>关键帧描述<textarea v-model="shotDraft.keyframeDescription" rows="3" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Image Prompt<textarea v-model="shotDraft.imagePrompt" rows="6" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Video Prompt<textarea v-model="shotDraft.videoPrompt" rows="6" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Negative Prompt<textarea v-model="shotDraft.negativePrompt" rows="3" :disabled="shotEditorMode==='view'"></textarea></label>
+              <p v-if="shotEditorError" class="shot-editor-error">{{ shotEditorError }}</p>
+            </div>
+          </div>
+
+          <footer class="shot-editor-actions">
+            <button class="secondary" @click="closeShotEditor">{{ shotEditorMode==='view'?'关闭':'取消' }}</button>
+            <button v-if="shotEditorMode==='view'" class="primary" @click="shotEditorMode='edit'">编辑此 Shot</button>
+            <button v-else class="primary" @click="saveShotEditor">保存 Shot</button>
+          </footer>
+        </section>
+      </div>
+
       <p v-if="error" class="error">本地 API：{{ error }}</p>
     </main>
   </div>

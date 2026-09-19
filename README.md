@@ -1,5 +1,9 @@
 # ComfyWorkflowStudio
 
+> **V1.0.0 已封版** · 2026-09-19  
+> 当前版本作为第一版稳定功能基线；后续新增能力应从 V2 开始，不再继续扩展 V1 功能范围。
+
+
 本地优先的 ComfyUI 工作流知识库与童语动画生产平台。当前主线为 **GPT Director + WebMCP + ChatGPT Web Image**。
 
 ## 当前能力

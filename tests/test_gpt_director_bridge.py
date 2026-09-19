@@ -109,6 +109,7 @@ class GPTDirectorBridgeTests(unittest.TestCase):
     def test_25_episode_candidate_and_existing_router(self):
         task = self.task(); value = GPTDirectorResult.model_validate(result(count=5))
         candidate = build_episode_candidate(task, value)
+        self.assertEqual(candidate['directorTaskId'], task.id)
         self.assertEqual(len(candidate['shots']), 5); self.assertEqual(candidate['shots'][0]['imagePrompt'], 'Mia in a bright park')
         app = FastAPI(); app.include_router(comic.comic_story_router()); paths = {route.path for route in app.routes}
         self.assertIn('/api/comic-story/analyze', paths); self.assertIn('/api/comic-story/gpt-director/tasks', paths)

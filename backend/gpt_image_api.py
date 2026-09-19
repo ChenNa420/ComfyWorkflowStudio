@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -8,8 +10,12 @@ from backend.db import ROOT
 from backend.gpt_image_service import GPTImageError, GPTImageService
 
 
+logger = logging.getLogger("comfy.gpt_image")
+
+
 class GenerateFrameRequest(BaseModel):
     replace: bool = False
+    gptUrl: str | None = None
 
 
 class PrepareStoryRequest(BaseModel):
@@ -41,6 +47,7 @@ def gpt_image_router() -> APIRouter:
             else 409 if exc.code in {'FRAME_EXISTS', 'RESULT_REQUIRED'}
             else 400
         )
+        logger.warning("GPT image API failed [%s] %s details=%s", exc.code, str(exc), exc.details or {})
         raise HTTPException(status_code=status, detail={'code': exc.code, 'message': str(exc)}) from exc
 
     @router.get('/status')
@@ -78,7 +85,7 @@ def gpt_image_router() -> APIRouter:
     @router.post('/tasks/{task_id}/shots/{shot_id}/generate')
     def generate(task_id: str, shot_id: str, payload: GenerateFrameRequest):
         try:
-            return public_job(service.create_job(task_id, shot_id, replace=payload.replace))
+            return public_job(service.create_job(task_id, shot_id, replace=payload.replace, gpt_url=payload.gptUrl))
         except GPTImageError as exc:
             fail(exc)
 

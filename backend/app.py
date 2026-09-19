@@ -16,6 +16,7 @@ from backend.gpt_director_auto_api import gpt_director_auto_router
 from backend.comfy.client import ComfyClient, ComfyClientError, comfy_url_from_env
 from backend.db import Database, ROOT
 from backend.models import GenerationTaskCreate, WorkflowManifest
+from backend.settings_api import settings_router
 from backend.workflow.catalog import import_payload
 from backend.workflow.dependencies import execution_node_types
 from backend.workflow.dependencies_api import workflow_dependencies_router
@@ -253,11 +254,152 @@ def create_app() -> FastAPI:
             rows = conn.execute('SELECT * FROM generation_task_events WHERE task_id=? ORDER BY id', (task_id,)).fetchall()
         return [dict(row) for row in rows]
 
+    @app.get('/api/outputs/paged')
+    def list_outputs_paged(
+        page: int = 1,
+        page_size: int = 8,
+        type: str = 'all',
+        project_id: str | None = None,
+        time_filter: str = 'all',
+        sort: str = 'newest',
+    ):
+        page = max(1, page)
+        if page_size not in {8, 12, 16}:
+            raise HTTPException(status_code=400, detail='invalid_page_size')
+        if type not in {'all', 'image', 'video', 'audio'}:
+            raise HTTPException(status_code=400, detail='invalid_output_type')
+        if time_filter not in {'all', 'today', 'week', 'month'}:
+            raise HTTPException(status_code=400, detail='invalid_time_filter')
+        if sort not in {'newest', 'oldest'}:
+            raise HTTPException(status_code=400, detail='invalid_sort')
+
+        project_key = "COALESCE(NULLIF(t.episode_id,''), NULLIF(t.project_id,''), o.workflow_id)"
+        base_where: list[str] = []
+        base_params: list[object] = []
+
+        if project_id and project_id != 'all':
+            base_where.append(f'{project_key} = ?')
+            base_params.append(project_id)
+
+        if time_filter != 'all':
+            age_map = {
+                'today': '-1 day',
+                'week': '-7 days',
+                'month': '-30 days',
+            }
+            base_where.append("datetime(o.created_at) >= datetime('now', ?)")
+            base_params.append(age_map[time_filter])
+
+        item_where = list(base_where)
+        item_params = list(base_params)
+        if type != 'all':
+            item_where.append('o.type = ?')
+            item_params.append(type)
+
+        base_clause = (' WHERE ' + ' AND '.join(base_where)) if base_where else ''
+        item_clause = (' WHERE ' + ' AND '.join(item_where)) if item_where else ''
+        order = 'DESC' if sort == 'newest' else 'ASC'
+
+        with db.connect() as conn:
+            total = conn.execute(
+                f'''
+                SELECT COUNT(*) AS c
+                FROM outputs o
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                {item_clause}
+                ''',
+                tuple(item_params),
+            ).fetchone()['c']
+
+            total_pages = (total + page_size - 1) // page_size if total else 0
+            if total_pages and page > total_pages:
+                page = total_pages
+            offset = (page - 1) * page_size
+
+            rows = conn.execute(
+                f'''
+                SELECT o.*,
+                       w.name AS workflow_name,
+                       t.project_id,
+                       t.episode_id,
+                       t.shot_id
+                FROM outputs o
+                LEFT JOIN workflows w ON w.id = o.workflow_id
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                {item_clause}
+                ORDER BY o.created_at {order}
+                LIMIT ? OFFSET ?
+                ''',
+                tuple(item_params + [page_size, offset]),
+            ).fetchall()
+
+            count_rows = conn.execute(
+                f'''
+                SELECT o.type, COUNT(*) AS c
+                FROM outputs o
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                {base_clause}
+                GROUP BY o.type
+                ''',
+                tuple(base_params),
+            ).fetchall()
+
+            project_rows = conn.execute(
+                f'''
+                SELECT DISTINCT
+                       {project_key} AS id,
+                       COALESCE(
+                           NULLIF(t.episode_id,''),
+                           NULLIF(t.project_id,''),
+                           NULLIF(w.name,''),
+                           o.workflow_id
+                       ) AS label
+                FROM outputs o
+                LEFT JOIN workflows w ON w.id = o.workflow_id
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                WHERE {project_key} IS NOT NULL
+                ORDER BY label COLLATE NOCASE
+                '''
+            ).fetchall()
+
+        counts = {'all': 0, 'image': 0, 'video': 0, 'audio': 0}
+        for row in count_rows:
+            row_type = str(row['type'])
+            count = int(row['c'])
+            counts['all'] += count
+            if row_type in counts:
+                counts[row_type] = count
+
+        return {
+            'items': [dict(row) for row in rows],
+            'page': page,
+            'page_size': page_size,
+            'total': int(total),
+            'total_pages': int(total_pages),
+            'counts': counts,
+            'projects': [dict(row) for row in project_rows],
+        }
+
     @app.get('/api/outputs')
     def list_outputs(limit: int = 100):
+        """Legacy list endpoint retained for older clients."""
         limit = max(1, min(limit, 500))
         with db.connect() as conn:
-            rows = conn.execute('SELECT * FROM outputs ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+            rows = conn.execute(
+                '''
+                SELECT o.*,
+                       w.name AS workflow_name,
+                       t.project_id,
+                       t.episode_id,
+                       t.shot_id
+                FROM outputs o
+                LEFT JOIN workflows w ON w.id = o.workflow_id
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                ORDER BY o.created_at DESC
+                LIMIT ?
+                ''',
+                (limit,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     @app.get('/api/outputs/{output_id}/file')
@@ -287,6 +429,7 @@ def create_app() -> FastAPI:
     app.include_router(workflow_pilot_router(db))
     app.include_router(workflow_runs_router(db))
     app.include_router(bindings_router(db))
+    app.include_router(settings_router(db))
     return app
 
 

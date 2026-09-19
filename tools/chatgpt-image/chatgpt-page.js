@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { jsonrepair } from "jsonrepair";
 
 import { ImageWorkerError } from "./errors.js";
 
@@ -207,22 +208,197 @@ async function isGenerating(page) {
   return false;
 }
 
-export function parseStoryJson(text) {
+export function escapeBareQuotesInJsonStrings(text) {
+  const source = String(text || "");
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  const isWhitespace = (value) => /\s/.test(value || "");
+  const startsJsonLiteral = (index) => {
+    const tail = source.slice(index);
+    return /^(?:true|false|null)(?=\s*[,\]}]|\s*$)/.test(tail);
+  };
+  const commaLooksStructural = (index) => {
+    let cursor = index + 1;
+    while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
+    const next = source[cursor];
+    if (next === undefined) return true;
+    return next === '"'
+      || next === "{"
+      || next === "["
+      || next === "]"
+      || next === "}"
+      || next === "-"
+      || /[0-9]/.test(next)
+      || startsJsonLiteral(cursor);
+  };
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (!inString) {
+      result += char;
+      if (char === '"') inString = true;
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char !== '"') {
+      result += char;
+      continue;
+    }
+
+    let cursor = index + 1;
+    while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
+    const next = source[cursor];
+    const closesString = next === undefined
+      || next === ":"
+      || next === "}"
+      || next === "]"
+      || (next === "," && commaLooksStructural(cursor));
+
+    if (closesString) {
+      result += char;
+      inString = false;
+    } else {
+      result += '\\"';
+    }
+  }
+
+  return result;
+}
+
+export function extractStoryJsonText(text) {
   const raw = String(text || "").trim();
-  const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const unfenced = raw.replace(/^\`\`\`(?:json)?\\s*/i, "").replace(/\\s*\`\`\`$/i, "").trim();
   const start = unfenced.indexOf("{");
   const end = unfenced.lastIndexOf("}");
   if (start < 0 || end <= start) {
     throw new ImageWorkerError("GPT response does not contain a JSON object", "DIRECTOR_INVALID_JSON");
   }
+  return unfenced.slice(start, end + 1);
+}
+
+export function repairGptJsonText(text) {
+  const candidate = extractStoryJsonText(text);
+
   try {
-    return JSON.parse(unfenced.slice(start, end + 1));
-  } catch (error) {
-    throw new ImageWorkerError(
-      "GPT returned invalid JSON: " + String(error?.message || error),
-      "DIRECTOR_INVALID_JSON",
-    );
+    JSON.parse(candidate);
+    return {
+      jsonText: candidate,
+      repaired: false,
+      repairMethod: null,
+    };
+  } catch (parseError) {
+    const quoteEscaped = escapeBareQuotesInJsonStrings(candidate);
+    if (quoteEscaped !== candidate) {
+      try {
+        JSON.parse(quoteEscaped);
+        return {
+          jsonText: quoteEscaped,
+          repaired: true,
+          repairMethod: "local_quote_escape",
+        };
+      } catch {
+        // Keep the quote-escaped candidate and let jsonrepair handle the
+        // remaining common LLM JSON mistakes without asking GPT to rewrite it.
+      }
+    }
+
+    try {
+      const repairedText = jsonrepair(quoteEscaped);
+      JSON.parse(repairedText);
+      return {
+        jsonText: repairedText,
+        repaired: true,
+        repairMethod: quoteEscaped !== candidate
+          ? "local_quote_escape_then_jsonrepair"
+          : "local_jsonrepair",
+      };
+    } catch (repairError) {
+      throw new ImageWorkerError(
+        "GPT returned invalid JSON: "
+          + String(parseError?.message || parseError)
+          + "; local repair failed: "
+          + String(repairError?.message || repairError),
+        "DIRECTOR_INVALID_JSON",
+      );
+    }
   }
+}
+
+export function parseStoryJsonDetailed(text) {
+  const repaired = repairGptJsonText(text);
+  return {
+    value: JSON.parse(repaired.jsonText),
+    jsonText: repaired.jsonText,
+    repaired: repaired.repaired,
+    repairMethod: repaired.repairMethod,
+  };
+}
+
+export function parseStoryJson(text) {
+  return parseStoryJsonDetailed(text).value;
+}
+
+export function normalizeStoryResultShape(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const story = value.creativeStory && typeof value.creativeStory === "object" && !Array.isArray(value.creativeStory)
+    ? value.creativeStory
+    : {};
+  const normalizedStory = {
+    title: String(story.title ?? "").trim(),
+    summary: String(story.summary ?? ""),
+    story: String(story.story ?? ""),
+    adaptationNotes: Array.isArray(story.adaptationNotes)
+      ? story.adaptationNotes.map((item) => String(item))
+      : story.adaptationNotes == null || story.adaptationNotes === ""
+        ? []
+        : [String(story.adaptationNotes)],
+  };
+
+  const normalizedShots = Array.isArray(value.shots)
+    ? value.shots.map((shot) => {
+      const item = shot && typeof shot === "object" && !Array.isArray(shot) ? shot : {};
+      return {
+        shotId: item.shotId,
+        title: String(item.title ?? ""),
+        duration: item.duration,
+        storyPurpose: String(item.storyPurpose ?? ""),
+        speaker: item.speaker == null ? null : String(item.speaker),
+        english: String(item.english ?? ""),
+        chinese: String(item.chinese ?? ""),
+        keyframeDescription: String(item.keyframeDescription ?? ""),
+        imagePrompt: String(item.imagePrompt ?? ""),
+        videoPrompt: String(item.videoPrompt ?? ""),
+        negativePrompt: String(item.negativePrompt ?? ""),
+        sourcePages: Array.isArray(item.sourcePages) ? item.sourcePages : [],
+      };
+    })
+    : value.shots;
+
+  return {
+    sourceUnderstanding: value.sourceUnderstanding && typeof value.sourceUnderstanding === "object" && !Array.isArray(value.sourceUnderstanding)
+      ? value.sourceUnderstanding
+      : {},
+    creativeStory: normalizedStory,
+    characterDefinitions: Array.isArray(value.characterDefinitions) ? value.characterDefinitions : [],
+    sceneDefinitions: Array.isArray(value.sceneDefinitions) ? value.sceneDefinitions : [],
+    shots: normalizedShots,
+  };
 }
 
 export function validateStoryResult(value) {
@@ -325,44 +501,58 @@ async function composerScope(page) {
   return page.locator("form").last();
 }
 
+const ATTACHMENT_EVIDENCE_SELECTOR = [
+  "[data-testid*='attachment']",
+  "[data-testid*='file']",
+  "button[aria-label*='Remove attachment']",
+  "button[aria-label*='remove attachment']",
+  "button[aria-label*='Remove file']",
+  "button[aria-label*='remove file']",
+  "button[aria-label*='Remove image']",
+  "button[aria-label*='remove image']",
+  "button[aria-label*='移除附件']",
+  "button[aria-label*='删除附件']",
+  "button[aria-label*='删除文件']",
+  "button[aria-label*='移除图片']",
+  "img[src^='blob:']",
+  "img[src*='files.oaiusercontent']",
+].join(", ");
+
 async function attachmentEvidence(page, filePaths) {
   const scope = await composerScope(page);
   const names = filePaths.map((filePath) => path.basename(filePath).toLowerCase());
-  const text = (await scope.innerText().catch(() => "")).toLowerCase();
-  const matchedNames = names.filter((name) => text.includes(name)).length;
-  const visualCount = await scope.locator([
-    "[data-testid*='attachment']",
-    "[data-testid*='file']",
-    "button[aria-label*='Remove attachment']",
-    "button[aria-label*='remove attachment']",
-    "button[aria-label*='Remove file']",
-    "button[aria-label*='remove file']",
-    "button[aria-label*='Remove image']",
-    "button[aria-label*='remove image']",
-    "button[aria-label*='移除附件']",
-    "button[aria-label*='删除附件']",
-    "button[aria-label*='删除文件']",
-    "button[aria-label*='移除图片']",
-    "img[src^='blob:']",
-    "img[src*='files.oaiusercontent']",
-  ].join(", ")).count().catch(() => 0);
+  const scopeText = (await scope.innerText().catch(() => "")).toLowerCase();
+  const pageText = (await page.locator("body").innerText().catch(() => "")).toLowerCase();
+  const matchedNames = names.filter((name) => scopeText.includes(name)).length;
+  const pageMatchedNames = names.filter((name) => pageText.includes(name)).length;
+  const visualCount = await scope.locator(ATTACHMENT_EVIDENCE_SELECTOR).count().catch(() => 0);
+  const pageVisualCount = await page.locator(ATTACHMENT_EVIDENCE_SELECTOR).count().catch(() => 0);
   const imageCount = await scope.locator("img").count().catch(() => 0);
-  return { matchedNames, visualCount, imageCount };
+  const pageImageCount = await page.locator("img").count().catch(() => 0);
+  return { matchedNames, pageMatchedNames, visualCount, pageVisualCount, imageCount, pageImageCount };
 }
 
-async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 9000) {
+export function attachmentEvidenceCount(baseline, evidence) {
+  const scopeImageDelta = Math.max(0, Number(evidence?.imageCount || 0) - Number(baseline?.imageCount || 0));
+  const pageImageDelta = Math.max(0, Number(evidence?.pageImageCount || 0) - Number(baseline?.pageImageCount || 0));
+  const scopeVisualDelta = Math.max(0, Number(evidence?.visualCount || 0) - Number(baseline?.visualCount || 0));
+  const pageVisualDelta = Math.max(0, Number(evidence?.pageVisualCount || 0) - Number(baseline?.pageVisualCount || 0));
+  return Math.max(
+    Number(evidence?.matchedNames || 0),
+    Number(evidence?.pageMatchedNames || 0),
+    scopeImageDelta,
+    pageImageDelta,
+    scopeVisualDelta,
+    pageVisualDelta,
+  );
+}
+
+async function waitForAttachmentEvidence(page, filePaths, baseline, timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const evidence = await attachmentEvidence(page, filePaths);
-    const imageDelta = Math.max(0, evidence.imageCount - Number(baseline?.imageCount || 0));
-    const visualDelta = Math.max(0, evidence.visualCount - Number(baseline?.visualCount || 0));
-    if (
-      evidence.matchedNames >= filePaths.length
-      || visualDelta >= filePaths.length
-      || imageDelta >= filePaths.length
-    ) {
-      return Math.max(evidence.matchedNames, visualDelta, imageDelta);
-    }
+    const count = attachmentEvidenceCount(baseline, evidence);
+    if (count >= filePaths.length) return count;
     await page.waitForTimeout(350);
   }
   return 0;
@@ -381,9 +571,14 @@ async function chooseComposerFileInput(page) {
 async function uploadViaComposerInput(page, filePaths, baseline) {
   const input = await chooseComposerFileInput(page);
   if (!input) return 0;
-  await input.setInputFiles(filePaths);
-  const assigned = await input.evaluate((element) => element.files?.length || 0).catch(() => 0);
-  if (assigned < filePaths.length) return 0;
+  try {
+    // ChatGPT may clear the native file input immediately after handling the
+    // change event, so input.files.length is not a reliable success signal.
+    // Set the files, then verify the visible attachment UI instead.
+    await input.setInputFiles(filePaths);
+  } catch {
+    return 0;
+  }
   return waitForAttachmentEvidence(page, filePaths, baseline);
 }
 
@@ -407,7 +602,7 @@ async function uploadViaFileChooser(page, filePaths, baseline) {
   if (!chooser) {
     await page.waitForTimeout(300);
     const menuItem = page.getByText(
-      /Add photos|Add files|Upload files|Attach files|上传文件|上传照片|添加照片|添加文件|照片和文件/i,
+      /Add photos|Add files|Upload files|Upload from computer|Attach files|上传文件|上传照片|添加照片|添加文件|照片和文件|从计算机上传|从电脑上传/i,
     ).last();
     if (await menuItem.count() && await menuItem.isVisible().catch(() => false)) {
       const pendingChooser = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
@@ -438,9 +633,17 @@ async function uploadFiles(page, filePaths) {
   }
 
   if (visibleCount < filePaths.length) {
+    const finalEvidence = await attachmentEvidence(page, filePaths).catch(() => null);
     throw new ImageWorkerError(
-      `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length})`,
+      `ChatGPT did not show all uploaded source images (${visibleCount}/${filePaths.length}). `
+        + `url=${page.url()} evidence=${JSON.stringify(finalEvidence || {})}`,
       "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+      {
+        currentUrl: page.url(),
+        sourcePageCount: filePaths.length,
+        attachmentEvidence: finalEvidence,
+        promptBoxFound: Boolean(await page.locator(SELECTORS.prompt).count().catch(() => 0)),
+      },
     );
   }
 
@@ -467,30 +670,62 @@ export class ChatGPTPage {
     const assistantBaseline = await assistantSnapshot(this.page);
     const attachmentCount = await uploadFiles(this.page, filePaths);
     const box = await findPromptBox(this.page, 20000);
-    try { await box.fill(prompt); }
-    catch {
-      await box.click();
-      await this.page.keyboard.insertText(prompt);
+    try {
+      await box.fill(prompt);
+    } catch {
+      try {
+        await box.click();
+        await this.page.keyboard.insertText(prompt);
+      } catch (error) {
+        throw new ImageWorkerError(
+          "ChatGPT source images were attached, but the story prompt could not be placed in the composer: "
+            + String(error?.message || error),
+          "CHATGPT_PROMPT_FILL_FAILED",
+        );
+      }
     }
     await this.page.waitForTimeout(500);
+    const evidence = await attachmentEvidence(this.page, filePaths);
     return {
       ok: true,
       prepared: true,
       sent: false,
       attachmentCount,
       promptLength: String(prompt || "").length,
+      attachmentEvidence: evidence,
+      promptBoxFound: true,
       assistantBaseline: { count: assistantBaseline.count, lastHash: assistantBaseline.lastHash },
       url: this.page.url(),
     };
   }
 
-  async collectStory(baseline) {
+  async collectStory(baseline, useLatest = false) {
     await assertAuthenticated(this.page, 20000);
     const current = await assistantSnapshot(this.page);
-    const changed = current.count > Number(baseline?.count || 0)
+    const baselineCount = Number(baseline?.count || 0);
+    const changed = current.count > baselineCount
       || (current.text && current.lastHash !== String(baseline?.lastHash || ""));
-    if (!changed || await isGenerating(this.page)) {
-      return { ok: true, pending: true, repaired: false };
+    const generating = await isGenerating(this.page);
+
+    if (generating) {
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: "GPT_STILL_GENERATING",
+        assistantCount: current.count,
+        baselineCount,
+      };
+    }
+    if ((!useLatest && !changed) || !current.text) {
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: current.text ? "NO_NEW_ASSISTANT_REPLY" : "ASSISTANT_REPLY_NOT_FOUND",
+        assistantCount: current.count,
+        baselineCount,
+      };
     }
 
     // Guard against layouts where the stop/generating marker disappears briefly
@@ -503,23 +738,49 @@ export class ChatGPTPage {
       || stable.count !== current.count
       || stable.lastHash !== current.lastHash
     ) {
-      return { ok: true, pending: true, repaired: false };
+      return {
+        ok: true,
+        pending: true,
+        repaired: false,
+        reason: "ASSISTANT_REPLY_NOT_STABLE",
+        assistantCount: stable.count,
+        baselineCount,
+      };
     }
 
     let result;
     let repaired = false;
+    let repairMethod = null;
     try {
-      result = validateStoryResult(parseStoryJson(stable.text));
+      const parsed = parseStoryJsonDetailed(stable.text);
+      result = validateStoryResult(normalizeStoryResultShape(parsed.value));
+      repaired = parsed.repaired;
+      repairMethod = parsed.repairMethod;
     } catch (error) {
       if (!(error instanceof ImageWorkerError) || error.code !== "DIRECTOR_INVALID_JSON") throw error;
+
+      // A manual "force fetch latest" must be read-only: never send another
+      // message to ChatGPT while the operator is trying to pull an existing
+      // completed reply back into the Studio. Return the local parse/repair
+      // failure immediately so it is visible instead of appearing to hang for
+      // up to three minutes inside GPT repair.
+      if (useLatest) {
+        throw new ImageWorkerError(
+          "Latest GPT reply could not be parsed after local JSON repair: " + error.message,
+          "DIRECTOR_LOCAL_JSON_REPAIR_FAILED",
+        );
+      }
+
       const repairedReply = await sendRepair(this.page, stable.text, error.message);
       try {
-        result = validateStoryResult(parseStoryJson(repairedReply.text));
+        const parsed = parseStoryJsonDetailed(repairedReply.text);
+        result = validateStoryResult(normalizeStoryResultShape(parsed.value));
         repaired = true;
+        repairMethod = parsed.repaired ? "gpt_then_local_jsonrepair" : "gpt";
       } catch (secondError) {
         if (secondError instanceof ImageWorkerError && secondError.code === "DIRECTOR_INVALID_JSON") {
           throw new ImageWorkerError(
-            "GPT returned invalid JSON after one automatic repair: " + secondError.message,
+            "GPT returned invalid JSON after local repair and one GPT repair: " + secondError.message,
             "DIRECTOR_JSON_REPAIR_FAILED",
           );
         }
@@ -530,6 +791,7 @@ export class ChatGPTPage {
       ok: true,
       pending: false,
       repaired,
+      repairMethod,
       result,
       assistant: { count: stable.count, lastHash: stable.lastHash },
       url: this.page.url(),

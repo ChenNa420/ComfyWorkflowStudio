@@ -31,7 +31,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stdout.write(`${JSON.stringify(safeError(error))}\n`);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    // A Playwright CDP transport keeps Node's event loop alive even after the
+    // command is complete. Exit this short-lived worker without closing the
+    // operator-owned Chrome process.
+    process.exit(process.exitCode || 0);
+  })
+  .catch((error) => {
+    process.stdout.write(`${JSON.stringify(safeError(error))}\n`, () => process.exit(1));
+  });
