@@ -381,3 +381,58 @@
 .workbench-content .wb-row-actions{
   padding-left:2px;
 }
+
+/* Workbench V10 — balanced column rhythm.
+   Replace percentage tracks that created large dead zones with constrained
+   tracks and even gaps, so Duration / Workflow / Status / Result / Actions sit
+   together as one production cluster. */
+.workbench-content .wb-shot-head,
+.workbench-content .wb-shot-row{
+  grid-template-columns:
+    34px
+    38px
+    90px
+    minmax(210px,1.35fr)
+    72px
+    minmax(145px,1fr)
+    minmax(105px,.85fr)
+    minmax(115px,.9fr)
+    minmax(140px,.95fr)!important;
+  column-gap:12px!important;
+}
+.workbench-content .wb-shot-head>*,
+.workbench-content .wb-shot-row>*{
+  padding-right:0!important;
+}
+.workbench-content .wb-shot-head>span:nth-child(5),
+.workbench-content .wb-shot-row>span:nth-child(5){
+  text-align:left!important;
+}
+.workbench-content .wb-shot-row select{
+  width:100%!important;
+  max-width:none!important;
+}
+.workbench-content .wb-render-status,
+.workbench-content .wb-result-cell,
+.workbench-content .wb-row-actions{
+  padding-left:0!important;
+}
+.workbench-content .wb-row-actions{
+  justify-content:flex-start!important;
+}
+@media(max-width:1280px){
+  .workbench-content .wb-shot-head,
+  .workbench-content .wb-shot-row{
+    grid-template-columns:
+      30px
+      34px
+      78px
+      minmax(190px,1.25fr)
+      64px
+      minmax(130px,1fr)
+      minmax(94px,.82fr)
+      minmax(104px,.86fr)
+      minmax(128px,.92fr)!important;
+    column-gap:10px!important;
+  }
+}
