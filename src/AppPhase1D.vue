@@ -441,7 +441,7 @@ onUnmounted(() => {
       <div class="sidebar-footer"><span class="dot" :class="health?.status==='ok'?'ok':''"></span><div><strong>Local Studio</strong><small>{{ health?.status==='ok'?'API 已连接':'等待连接' }}</small></div></div>
     </aside>
 
-    <main class="content">
+    <main :class="['content',{ 'workbench-content':activePage==='workbench' }]">
       <header v-if="activePage!=='workbench'" class="topbar"><div><p class="eyebrow">COMFY WORKFLOW STUDIO</p><h1>{{ currentTitle[0] }}</h1><span>{{ currentTitle[1] }}</span></div><div class="top-actions"><div class="top-search"><Search :size="15"/><input placeholder="搜索工作流、模型、作品..."/></div><div class="status-pill"><span class="dot" :class="health?.comfyUi==='connected'?'ok':''"></span>Phase {{ health?.phase || '1D' }}</div></div></header>
       <header v-else class="wb-header">
         <div>
@@ -561,7 +561,7 @@ onUnmounted(() => {
                   <div class="wb-row-actions">
                     <button v-if="item.status==='pending'||item.status==='failed'" class="wb-generate-btn" @click.stop="generateSingleWorkbench(item.index)">立即生成</button>
                     <button class="secondary small" @click.stop="openShotEditor(item.index,'view')">查看</button>
-                    <button class="wb-more" @click.stop="openShotEditor(item.index,'view')">•••</button>
+                    
                   </div>
                 </div>
               </div>
@@ -595,7 +595,7 @@ onUnmounted(() => {
               <label>分辨率<select v-model="workbenchResolution"><option>1080 × 1920 (9:16)</option><option>1920 × 1080 (16:9)</option><option>720 × 1280 (9:16)</option></select></label>
               <label>生成时长<select v-model="workbenchDurationMode"><option>按分镜时长</option><option>统一 5 秒</option><option>统一 10 秒</option></select></label>
               <label>随机种子（可选）<input v-model="workbenchSeed" placeholder="不填则随机"/></label>
-              <details><summary>高级参数⌄</summary><p>高级参数将在动态任务表单中继续配置。</p></details>
+              <details><summary>高级参数⌄</summary><label class="wb-advanced-check"><input v-model="workbenchUsePreviousFrame" type="checkbox"/> 使用上一镜头最后一帧</label><p>高级参数将在动态任务表单中继续配置；成功镜头默认不自动重新生成。</p></details>
             </section>
 
             <section class="panel wb-side-card wb-progress-card">
@@ -610,11 +610,6 @@ onUnmounted(() => {
               </div>
             </section>
 
-            <section class="panel wb-side-card wb-continuity-card">
-              <h3>连续性</h3>
-              <label><input v-model="workbenchUsePreviousFrame" type="checkbox"/> 使用上一镜头最后一帧</label>
-              <p>成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</p>
-            </section>
           </aside>
         </section>
       </template>
