@@ -258,7 +258,21 @@ def create_app() -> FastAPI:
     def list_outputs(limit: int = 100):
         limit = max(1, min(limit, 500))
         with db.connect() as conn:
-            rows = conn.execute('SELECT * FROM outputs ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+            rows = conn.execute(
+                '''
+                SELECT o.*,
+                       w.name AS workflow_name,
+                       t.project_id,
+                       t.episode_id,
+                       t.shot_id
+                FROM outputs o
+                LEFT JOIN workflows w ON w.id = o.workflow_id
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                ORDER BY o.created_at DESC
+                LIMIT ?
+                ''',
+                (limit,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     @app.get('/api/outputs/{output_id}/file')
