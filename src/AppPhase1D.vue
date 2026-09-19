@@ -63,6 +63,9 @@ const selectedAnalysis = ref<Record<string, any> | null>(null)
 const error = ref('')
 const comicEpisode = ref<Record<string, any> | null>(null)
 const comicFrameUrls = ref<Record<string, string>>({})
+const editingShotIndex = ref<number | null>(null)
+const shotDraft = ref<Record<string, any> | null>(null)
+const shotEditorError = ref('')
 
 const kidsNav: NavItem[] = [
   { key: 'dashboard', label: '首页', icon: Home },
@@ -138,6 +141,49 @@ const displayCharacters = computed(() => {
   if (!comicEpisode.value) return ['Benny · 小熊', 'Mimi · 小猫', '新角色']
   return (comicEpisode.value.characterDefinitions || []).map((role: any) => role.name || role.id)
 })
+
+function openShotEditor(index: number) {
+  const shot = comicEpisode.value?.shots?.[index]
+  if (!shot) {
+    error.value = '当前镜头没有可编辑的漫画 Episode 数据。'
+    return
+  }
+  editingShotIndex.value = index
+  shotEditorError.value = ''
+  shotDraft.value = JSON.parse(JSON.stringify(shot))
+}
+
+function closeShotEditor() {
+  editingShotIndex.value = null
+  shotDraft.value = null
+  shotEditorError.value = ''
+}
+
+function saveShotEditor() {
+  if (editingShotIndex.value === null || !shotDraft.value || !comicEpisode.value?.shots?.length) return
+  const duration = Number(shotDraft.value.duration)
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 10) {
+    shotEditorError.value = '镜头时长必须大于 0 且不超过 10 秒。'
+    return
+  }
+  if (!String(shotDraft.value.imagePrompt || '').trim()) {
+    shotEditorError.value = 'Image Prompt 不能为空。'
+    return
+  }
+  if (!String(shotDraft.value.videoPrompt || '').trim()) {
+    shotEditorError.value = 'Video Prompt 不能为空。'
+    return
+  }
+  const shots = [...comicEpisode.value.shots]
+  shots[editingShotIndex.value] = {
+    ...shots[editingShotIndex.value],
+    ...shotDraft.value,
+    duration,
+  }
+  comicEpisode.value = {...comicEpisode.value, shots}
+  sessionStorage.setItem('cws-comic-story-episode', JSON.stringify(comicEpisode.value))
+  closeShotEditor()
+}
 
 function navigate(key: string) {
   activePage.value = key
@@ -252,7 +298,7 @@ onUnmounted(() => {
 
       <template v-else-if="activePage==='storyboard'">
         <section v-if="comicEpisode" class="notice"><b>漫画分镜已载入：</b>{{ comicEpisode.shots?.length || 0 }} Shots · {{ comicEpisode.aspectRatio }} · 来源页 {{ comicEpisode.source?.pages?.join(', ') }}</section>
-        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="shot in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary">编辑 Shot</button></div></div></section>
+        <section class="panel table-panel"><div class="section-head"><div><span class="eyebrow">{{ comicEpisode?.title || 'EP003' }}</span><h3>分镜与连续性</h3></div><div class="tag-row"><span>角色一致性 ✓</span><span>对白一致性 ✓</span><span>道具连续性 ⚠</span></div></div><div class="shot-list"><div v-for="(shot,index) in displayShots" :key="shot[0]" class="shot-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="18"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span class="status-chip neutral">首帧已就绪</span><button class="secondary" @click="openShotEditor(index)">编辑 Shot</button></div></div></section>
       </template>
 
       <template v-else-if="activePage==='workbench'">
@@ -298,6 +344,51 @@ onUnmounted(() => {
       </template>
 
       <p v-else class="panel empty-page">页面正在接入真实数据。</p>
+
+      <div v-if="shotDraft && editingShotIndex !== null" class="shot-editor-overlay" @click.self="closeShotEditor">
+        <section class="shot-editor-panel" role="dialog" aria-modal="true" aria-label="编辑 Shot">
+          <header class="shot-editor-head">
+            <div>
+              <span class="eyebrow">SHOT EDITOR</span>
+              <h3>编辑 Shot {{ String((editingShotIndex ?? 0) + 1).padStart(2, '0') }}</h3>
+              <p>修改会同步到当前漫画 Episode，并用于后续成片工作台；已生成关键帧不会自动重生。</p>
+            </div>
+            <button class="secondary small" @click="closeShotEditor">关闭</button>
+          </header>
+
+          <div class="shot-editor-body">
+            <aside class="shot-editor-preview">
+              <div class="shot-editor-frame">
+                <img v-if="comicFrameUrls[String(shotDraft.shotId || '')]" :src="comicFrameUrls[String(shotDraft.shotId || '')]" alt="当前关键帧"/>
+                <Image v-else :size="30"/>
+              </div>
+              <small>当前关键帧预览</small>
+            </aside>
+
+            <div class="shot-editor-form">
+              <div class="shot-editor-grid">
+                <label>标题<input v-model="shotDraft.title"/></label>
+                <label>时长（秒）<input v-model.number="shotDraft.duration" type="number" min="0.1" max="10" step="0.5"/></label>
+                <label>说话人<input v-model="shotDraft.speaker" placeholder="无对白可留空"/></label>
+                <label>Shot ID<input :value="shotDraft.shotId" disabled/></label>
+              </div>
+              <label>英文对白<textarea v-model="shotDraft.english" rows="2"></textarea></label>
+              <label>中文对白<textarea v-model="shotDraft.chinese" rows="2"></textarea></label>
+              <label>关键帧描述<textarea v-model="shotDraft.keyframeDescription" rows="3"></textarea></label>
+              <label>Image Prompt<textarea v-model="shotDraft.imagePrompt" rows="6"></textarea></label>
+              <label>Video Prompt<textarea v-model="shotDraft.videoPrompt" rows="6"></textarea></label>
+              <label>Negative Prompt<textarea v-model="shotDraft.negativePrompt" rows="3"></textarea></label>
+              <p v-if="shotEditorError" class="shot-editor-error">{{ shotEditorError }}</p>
+            </div>
+          </div>
+
+          <footer class="shot-editor-actions">
+            <button class="secondary" @click="closeShotEditor">取消</button>
+            <button class="primary" @click="saveShotEditor">保存 Shot</button>
+          </footer>
+        </section>
+      </div>
+
       <p v-if="error" class="error">本地 API：{{ error }}</p>
     </main>
   </div>

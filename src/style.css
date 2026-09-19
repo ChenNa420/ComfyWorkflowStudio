@@ -5,3 +5,19 @@
 @media(max-width:700px){.topbar>div:first-child{min-width:0}.topbar h1{overflow-wrap:anywhere}}
 
 @media(max-width:520px){.top-actions{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch}.top-search{width:100%;min-width:0}.status-pill{width:max-content}}
+
+.shot-editor-overlay{position:fixed;inset:0;z-index:1200;background:rgba(23,31,52,.44);display:flex;align-items:center;justify-content:center;padding:28px;backdrop-filter:blur(3px)}
+.shot-editor-panel{width:min(980px,96vw);max-height:92vh;overflow:hidden;border:1px solid #e1e6f0;border-radius:18px;background:#fff;box-shadow:0 24px 70px rgba(28,39,70,.24);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.shot-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding:18px 20px;border-bottom:1px solid #edf0f6}
+.shot-editor-head h3{margin:4px 0 4px;font-size:19px}.shot-editor-head p{margin:0;color:#7f899f;font-size:10px}
+.shot-editor-body{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;padding:18px 20px;overflow:auto}
+.shot-editor-preview{display:grid;align-content:start;gap:8px;color:#858ea4;font-size:9px}
+.shot-editor-frame{width:180px;aspect-ratio:9/16;max-height:310px;overflow:hidden;border-radius:12px;background:#eef1f7;display:grid;place-items:center;color:#8a94aa}
+.shot-editor-frame img{width:100%;height:100%;object-fit:cover;object-position:center center;display:block}
+.shot-editor-form{display:grid;gap:10px}.shot-editor-form label{display:grid;gap:5px;font-size:9px;color:#59637b}
+.shot-editor-form input,.shot-editor-form textarea{width:100%;border:1px solid #dfe5f1;border-radius:9px;background:#fbfcff;padding:9px 10px;color:#34405c;outline:none;font:inherit}
+.shot-editor-form textarea{resize:vertical;line-height:1.55}.shot-editor-form input:focus,.shot-editor-form textarea:focus{border-color:#7da4f6;box-shadow:0 0 0 3px rgba(79,125,238,.08)}
+.shot-editor-form input:disabled{background:#f2f4f8;color:#8d96aa}.shot-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.shot-editor-error{margin:0;padding:8px 10px;border-radius:8px;background:#fff2f4;color:#b8475a;font-size:9px}
+.shot-editor-actions{display:flex;justify-content:flex-end;gap:8px;padding:13px 20px;border-top:1px solid #edf0f6;background:#fbfcff}
+@media(max-width:760px){.shot-editor-overlay{padding:10px}.shot-editor-body{grid-template-columns:1fr}.shot-editor-preview{justify-items:center}.shot-editor-frame{width:140px}.shot-editor-grid{grid-template-columns:1fr}}
