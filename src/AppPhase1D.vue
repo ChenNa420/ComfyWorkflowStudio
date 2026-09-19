@@ -85,7 +85,6 @@ const workbenchHelpOpen = ref(false)
 
 const kidsNav: NavItem[] = [
   { key: 'dashboard', label: '首页', icon: Home },
-  { key: 'story', label: '故事创作', icon: BookOpen },
   { key: 'comic-story', label: '漫画转故事', icon: Sparkles },
   { key: 'characters', label: '角色管理', icon: Users },
   { key: 'storyboard', label: '分镜设计', icon: Film },
