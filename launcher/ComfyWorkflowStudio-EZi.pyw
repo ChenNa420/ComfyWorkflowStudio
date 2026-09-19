@@ -88,7 +88,7 @@ class Launcher(tk.Tk):
         self._closing = False
 
         self.title(APP_TITLE)
-        self.geometry("590x326")
+        self.geometry("590x310")
         self.resizable(False, False)
         self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -154,7 +154,7 @@ class Launcher(tk.Tk):
             self.status_labels[key] = dot
 
         sep = tk.Frame(self, bg=BORDER, height=1)
-        sep.pack(fill="x", padx=12, pady=(3, 7))
+        sep.pack(fill="x", padx=12, pady=(2, 6))
 
         folders = tk.Frame(self, bg=BG)
         folders.pack(fill="x", padx=10)
@@ -177,7 +177,7 @@ class Launcher(tk.Tk):
             fg=MUTED,
             font=("Microsoft YaHei UI", 8),
         )
-        self.footer.pack(fill="x", padx=12, pady=(10, 0))
+        self.footer.pack(fill="x", padx=12, pady=(7, 0))
 
     def _make_column(self, parent: tk.Widget, title: str, accent: str) -> tuple[tk.Frame, tk.Frame]:
         outer = tk.Frame(parent, bg=BG, width=180)
@@ -203,9 +203,10 @@ class Launcher(tk.Tk):
         accent: str,
         command,
         width: int = 18,
-    ) -> tk.Button:
+    ) -> tk.Frame:
+        shell = tk.Frame(parent, bg=accent, bd=0, highlightthickness=0)
         button = tk.Button(
-            parent,
+            shell,
             text=text,
             command=command,
             bg=PANEL,
@@ -214,19 +215,18 @@ class Launcher(tk.Tk):
             activeforeground=accent,
             relief="flat",
             bd=0,
-            highlightthickness=1,
-            highlightbackground=accent,
-            highlightcolor=accent,
+            highlightthickness=0,
             font=("Microsoft YaHei UI", 8, "bold"),
             cursor="hand2",
             width=width,
             height=1,
             padx=5,
-            pady=4,
+            pady=3,
         )
+        button.pack(fill="both", expand=True, padx=1, pady=1)
         button.bind("<Enter>", lambda _event: button.configure(bg="#18212b"))
         button.bind("<Leave>", lambda _event: button.configure(bg=PANEL))
-        return button
+        return shell
 
     def _run_powershell(self, script_name: str, wait: bool = False) -> None:
         script = ROOT / script_name
