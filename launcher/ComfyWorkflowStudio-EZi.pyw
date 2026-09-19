@@ -97,8 +97,9 @@ class Launcher(tk.Tk):
         self.after(150, self.refresh_status)
 
     def _build_ui(self) -> None:
-        header = tk.Frame(self, bg=BG)
-        header.pack(fill="x", padx=14, pady=(8, 5))
+        header = tk.Frame(self, bg=BG, height=30)
+        header.pack(fill="x", padx=14, pady=(7, 4))
+        header.pack_propagate(False)
 
         tk.Label(
             header,
