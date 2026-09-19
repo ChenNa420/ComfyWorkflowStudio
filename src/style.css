@@ -304,3 +304,16 @@
   object-fit:cover!important;
   object-position:center center!important;
 }
+
+/* Workbench V7 — fix the two remaining large keyframe crops.
+   Keep shot-list thumbnails identical to storyboard, but the wider project
+   cover and current-preview windows need a lower focal point to show the
+   subject instead of the empty upper pink area. */
+.workbench-content .wb-project-cover img,
+.workbench-content .wb-current-preview img{
+  display:block!important;
+  width:100%!important;
+  height:100%!important;
+  object-fit:cover!important;
+  object-position:50% 72%!important;
+}
