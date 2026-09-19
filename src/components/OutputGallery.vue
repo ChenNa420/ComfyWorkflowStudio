@@ -102,7 +102,12 @@ async function loadPage(resetPage = false) {
     })
     if (projectFilter.value !== 'all') params.set('project_id', projectFilter.value)
 
-    const response = await fetch(`/api/outputs?${params.toString()}`)
+    let response = await fetch(`/api/outputs/paged?${params.toString()}`)
+    let legacyFallback = false
+    if (response.status === 404) {
+      legacyFallback = true
+      response = await fetch('/api/outputs?limit=200')
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const payload = await response.json() as OutputPage | Output[]
     if (serial !== requestSerial) return
@@ -135,7 +140,7 @@ async function loadPage(resetPage = false) {
         if (key) map.set(key, item.episode_id || item.project_id || item.workflow_name || item.workflow_id)
       }
       projects.value = [...map.entries()].map(([id, label]) => ({ id, label }))
-      error.value = '后端仍在使用旧版作品接口；当前已兼容显示。重启工作台后会自动切换到后端分页。'
+      error.value = ''
     } else {
       outputs.value = payload.items || []
       counts.value = payload.counts || { all: payload.total || 0, image: 0, video: 0, audio: 0 }

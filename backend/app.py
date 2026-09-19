@@ -254,8 +254,8 @@ def create_app() -> FastAPI:
             rows = conn.execute('SELECT * FROM generation_task_events WHERE task_id=? ORDER BY id', (task_id,)).fetchall()
         return [dict(row) for row in rows]
 
-    @app.get('/api/outputs')
-    def list_outputs(
+    @app.get('/api/outputs/paged')
+    def list_outputs_paged(
         page: int = 1,
         page_size: int = 8,
         type: str = 'all',
@@ -379,6 +379,28 @@ def create_app() -> FastAPI:
             'counts': counts,
             'projects': [dict(row) for row in project_rows],
         }
+
+    @app.get('/api/outputs')
+    def list_outputs(limit: int = 100):
+        """Legacy list endpoint retained for older clients."""
+        limit = max(1, min(limit, 500))
+        with db.connect() as conn:
+            rows = conn.execute(
+                '''
+                SELECT o.*,
+                       w.name AS workflow_name,
+                       t.project_id,
+                       t.episode_id,
+                       t.shot_id
+                FROM outputs o
+                LEFT JOIN workflows w ON w.id = o.workflow_id
+                LEFT JOIN generation_tasks t ON t.id = o.task_id
+                ORDER BY o.created_at DESC
+                LIMIT ?
+                ''',
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     @app.get('/api/outputs/{output_id}/file')
     def output_file(output_id: str, download: bool = False):
