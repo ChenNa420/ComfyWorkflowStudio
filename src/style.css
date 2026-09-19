@@ -471,3 +471,9 @@
     column-gap:12px!important;
   }
 }
+
+/* Workbench workflow readiness gate */
+.workbench-content .wb-workflow-gate{display:block;margin-top:-2px;color:#27845f;font-size:8.5px;line-height:1.45}
+.workbench-content .wb-workflow-gate.error{color:#b34b5b}
+.workbench-content .wb-generate-btn:disabled,
+.workbench-content .wb-batch-bar button:disabled{opacity:.48;cursor:not-allowed}

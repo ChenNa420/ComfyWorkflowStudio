@@ -77,6 +77,9 @@ const workbenchDurationMode = ref('按分镜时长')
 const workbenchSeed = ref('')
 const workbenchUsePreviousFrame = ref(false)
 const workbenchShotWorkflows = ref<Record<string, string>>({})
+const workbenchReadyWorkflowIds = ref<Record<string, true>>({})
+const workbenchReadinessLoaded = ref(false)
+const workbenchReadinessError = ref('')
 const workbenchHelpOpen = ref(false)
 
 const kidsNav: NavItem[] = [
@@ -134,6 +137,7 @@ const filteredWorkflows = computed(() => {
 })
 
 const workbenchVideoWorkflows = computed(() => workflows.value.filter((item) => {
+  if (!workbenchReadyWorkflowIds.value[item.id]) return false
   const capabilities = (item.capabilities || []).map(value => String(value).toLowerCase())
   const outputs = (item.outputs || []).map(value => String(value).toLowerCase())
   const category = String(item.category || '').toLowerCase()
@@ -282,6 +286,10 @@ function workbenchStatusLabel(status: WorkbenchShotStatus) {
 }
 
 function queueWorkbenchGeneration(indices: number[], mode: string, replace = false) {
+  if (!workbenchVideoWorkflows.value.length) {
+    error.value = workbenchReadinessError.value || '当前没有通过 CERTIFIED + READY 的视频工作流，请先到工作流库完成预检认证与依赖准备。'
+    return
+  }
   const unique = [...new Set(indices)].filter(index => index >= 0 && index < workbenchShots.value.length)
   if (!unique.length) {
     error.value = '请先选择至少一个镜头。'
@@ -422,13 +430,40 @@ function onHashChange() {
 
 async function loadData() {
   try {
-    const [healthResponse, workflowResponse] = await Promise.all([fetch('/api/health'), fetch('/api/workflows')])
+    const [healthResponse, workflowResponse, preflightResponse] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/workflows'),
+      fetch('/api/readiness/preflight?certifiedOnly=true&limit=1000'),
+    ])
     if (!healthResponse.ok) throw new Error(`Health HTTP ${healthResponse.status}`)
     health.value = await healthResponse.json()
     workflows.value = workflowResponse.ok ? await workflowResponse.json() : []
+
+    workbenchReadyWorkflowIds.value = {}
+    workbenchReadinessLoaded.value = true
+    workbenchReadinessError.value = ''
+    if (preflightResponse.ok) {
+      const preflight = await preflightResponse.json()
+      const ready: Record<string, true> = {}
+      for (const item of preflight.items || []) {
+        if (item?.status === 'CERTIFIED' && item?.dependencyStatus === 'READY' && item?.workflowId) {
+          ready[String(item.workflowId)] = true
+        }
+      }
+      workbenchReadyWorkflowIds.value = ready
+      if (!preflight.connected) {
+        workbenchReadinessError.value = 'ComfyUI 当前离线，无法提供 CERTIFIED + READY 视频工作流。'
+      }
+    } else {
+      workbenchReadinessError.value = `Runtime 预检读取失败：HTTP ${preflightResponse.status}`
+    }
+
     ensureWorkbenchDefaultWorkflow()
     error.value = ''
   } catch (value) {
+    workbenchReadinessLoaded.value = true
+    workbenchReadyWorkflowIds.value = {}
+    workbenchReadinessError.value = value instanceof Error ? value.message : '无法读取 Runtime 预检状态'
     error.value = value instanceof Error ? value.message : '无法连接本地 API'
   }
 }
@@ -593,7 +628,7 @@ onUnmounted(() => {
                     <template v-else>—</template>
                   </div>
                   <div class="wb-row-actions">
-                    <button v-if="item.status==='pending'||item.status==='failed'" class="wb-generate-btn" @click.stop="generateSingleWorkbench(item.index)">立即生成</button>
+                    <button v-if="item.status==='pending'||item.status==='failed'" class="wb-generate-btn" :disabled="!workbenchVideoWorkflows.length" @click.stop="generateSingleWorkbench(item.index)">立即生成</button>
                     <button class="secondary small" @click.stop="openShotEditor(item.index,'view')">查看</button>
                     
                   </div>
@@ -603,9 +638,9 @@ onUnmounted(() => {
               <div class="wb-batch-bar">
                 <div><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(inputChecked($event))"/><b>已选择 {{ workbenchSelected.length }} 个镜头</b></div>
                 <div>
-                  <button class="secondary" :disabled="!workbenchSelected.length" @click="regenerateSelectedWorkbench">↻ 重新生成选中</button>
-                  <button class="secondary" :disabled="!workbenchShots.length" @click="generateFromCurrentWorkbench">▶ 从当前开始批量生成</button>
-                  <button class="primary" :disabled="!workbenchShots.length" @click="generateWholeWorkbench">✦ 开始整集生成</button>
+                  <button class="secondary" :disabled="!workbenchSelected.length || !workbenchVideoWorkflows.length" @click="regenerateSelectedWorkbench">↻ 重新生成选中</button>
+                  <button class="secondary" :disabled="!workbenchShots.length || !workbenchVideoWorkflows.length" @click="generateFromCurrentWorkbench">▶ 从当前开始批量生成</button>
+                  <button class="primary" :disabled="!workbenchShots.length || !workbenchVideoWorkflows.length" @click="generateWholeWorkbench">✦ 开始整集生成</button>
                   <button class="secondary" disabled>停止生成</button>
                 </div>
               </div>
@@ -626,6 +661,9 @@ onUnmounted(() => {
             <section class="panel wb-side-card wb-settings-card">
               <h3>生成设置</h3>
               <label>视频工作流<select v-model="workbenchDefaultWorkflow" :disabled="!workbenchVideoWorkflows.length"><option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option><option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
+              <small :class="['wb-workflow-gate',{error:!!workbenchReadinessError}]">
+                {{ workbenchReadinessError || (workbenchReadinessLoaded ? `仅显示 CERTIFIED + READY · 当前 ${workbenchVideoWorkflows.length} 个` : '正在读取 Runtime 认证状态…') }}
+              </small>
               <label>分辨率<select v-model="workbenchResolution"><option>1080 × 1920 (9:16)</option><option>1920 × 1080 (16:9)</option><option>720 × 1280 (9:16)</option></select></label>
               <label>生成时长<select v-model="workbenchDurationMode"><option>按分镜时长</option><option>统一 5 秒</option><option>统一 10 秒</option></select></label>
               <label>随机种子（可选）<input v-model="workbenchSeed" placeholder="不填则随机"/></label>
