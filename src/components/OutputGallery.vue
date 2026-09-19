@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Download,
   Film,
@@ -24,6 +26,28 @@ type Output = {
   created_at: string
 }
 
+type OutputCounts = {
+  all: number
+  image: number
+  video: number
+  audio: number
+}
+
+type ProjectOption = {
+  id: string
+  label: string
+}
+
+type OutputPage = {
+  items: Output[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+  counts: OutputCounts
+  projects: ProjectOption[]
+}
+
 type MediaInfo = {
   width?: number
   height?: number
@@ -31,76 +55,82 @@ type MediaInfo = {
 }
 
 const outputs = ref<Output[]>([])
+const counts = ref<OutputCounts>({ all: 0, image: 0, video: 0, audio: 0 })
+const projects = ref<ProjectOption[]>([])
 const error = ref('')
 const loading = ref(false)
 const mediaType = ref<'all' | 'image' | 'video' | 'audio'>('all')
 const sortMode = ref<'newest' | 'oldest'>('newest')
 const projectFilter = ref('all')
 const timeFilter = ref<'all' | 'today' | 'week' | 'month'>('all')
+const currentPage = ref(1)
+const pageSize = ref<8 | 12 | 16>(8)
+const total = ref(0)
+const totalPages = ref(0)
 const mediaInfo = reactive<Record<string, MediaInfo>>({})
+let requestSerial = 0
+let initialized = false
 
 const waveform = [
   18,26,40,33,48,55,36,28,31,43,57,62,49,37,29,23,34,46,
   58,68,55,42,31,28,35,47,61,52,39,30,24,32,45,54,41,27,
 ]
 
-const counts = computed(() => ({
-  all: outputs.value.length,
-  image: outputs.value.filter(item => item.type === 'image').length,
-  video: outputs.value.filter(item => item.type === 'video').length,
-  audio: outputs.value.filter(item => item.type === 'audio').length,
-}))
-
-const projects = computed(() => {
-  const map = new Map<string, string>()
-  for (const item of outputs.value) {
-    const key = item.episode_id || item.project_id || item.workflow_id
-    if (!key) continue
-    map.set(key, item.episode_id || item.project_id || item.workflow_name || item.workflow_id)
-  }
-  return [...map.entries()].map(([id, label]) => ({ id, label }))
+const visiblePages = computed(() => {
+  const pages = totalPages.value
+  if (pages <= 1) return pages === 1 ? [1] : []
+  const maxVisible = 5
+  let start = Math.max(1, currentPage.value - Math.floor(maxVisible / 2))
+  let end = Math.min(pages, start + maxVisible - 1)
+  start = Math.max(1, end - maxVisible + 1)
+  const result: number[] = []
+  for (let page = start; page <= end; page += 1) result.push(page)
+  return result
 })
 
-const filteredOutputs = computed(() => {
-  const now = Date.now()
-  let rows = outputs.value.filter(item => {
-    if (mediaType.value !== 'all' && item.type !== mediaType.value) return false
-    if (projectFilter.value !== 'all') {
-      const key = item.episode_id || item.project_id || item.workflow_id
-      if (key !== projectFilter.value) return false
-    }
-    if (timeFilter.value !== 'all') {
-      const created = new Date(item.created_at).getTime()
-      const age = now - created
-      const maxAge = timeFilter.value === 'today'
-        ? 24 * 60 * 60 * 1000
-        : timeFilter.value === 'week'
-          ? 7 * 24 * 60 * 60 * 1000
-          : 30 * 24 * 60 * 60 * 1000
-      if (!Number.isFinite(created) || age > maxAge) return false
-    }
-    return true
-  })
-  rows = [...rows].sort((a, b) => {
-    const left = new Date(a.created_at).getTime() || 0
-    const right = new Date(b.created_at).getTime() || 0
-    return sortMode.value === 'newest' ? right - left : left - right
-  })
-  return rows
-})
-
-async function refresh() {
+async function loadPage(resetPage = false) {
+  if (resetPage) currentPage.value = 1
+  const serial = ++requestSerial
   loading.value = true
   try {
-    const response = await fetch('/api/outputs?limit=200')
+    const params = new URLSearchParams({
+      page: String(currentPage.value),
+      page_size: String(pageSize.value),
+      type: mediaType.value,
+      time_filter: timeFilter.value,
+      sort: sortMode.value,
+    })
+    if (projectFilter.value !== 'all') params.set('project_id', projectFilter.value)
+
+    const response = await fetch(`/api/outputs?${params.toString()}`)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    outputs.value = await response.json()
+    const payload = await response.json() as OutputPage
+    if (serial !== requestSerial) return
+
+    outputs.value = payload.items || []
+    counts.value = payload.counts || { all: payload.total || 0, image: 0, video: 0, audio: 0 }
+    projects.value = payload.projects || []
+    currentPage.value = payload.page || 1
+    pageSize.value = (payload.page_size || pageSize.value) as 8 | 12 | 16
+    total.value = payload.total || 0
+    totalPages.value = payload.total_pages || 0
     error.value = ''
   } catch (value) {
+    if (serial !== requestSerial) return
     error.value = value instanceof Error ? value.message : '作品读取失败'
   } finally {
-    loading.value = false
+    if (serial === requestSerial) loading.value = false
   }
+}
+
+function refresh() {
+  return loadPage(false)
+}
+
+function goToPage(page: number) {
+  if (loading.value || page < 1 || page > totalPages.value || page === currentPage.value) return
+  currentPage.value = page
+  loadPage(false)
 }
 
 function fileUrl(item: Output, download = false) {
@@ -172,9 +202,9 @@ function formatDate(value: string) {
 
 function formatDuration(seconds?: number) {
   if (!seconds || !Number.isFinite(seconds)) return ''
-  const total = Math.max(0, Math.round(seconds))
-  const minutes = Math.floor(total / 60)
-  const remainder = total % 60
+  const totalSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(totalSeconds / 60)
+  const remainder = totalSeconds % 60
   return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
 }
 
@@ -184,7 +214,15 @@ function resolution(item: Output) {
   return `${info.width} × ${info.height}`
 }
 
-onMounted(refresh)
+watch([mediaType, sortMode, projectFilter, timeFilter, pageSize], () => {
+  if (!initialized) return
+  loadPage(true)
+})
+
+onMounted(async () => {
+  await loadPage(false)
+  initialized = true
+})
 </script>
 
 <template>
@@ -214,7 +252,7 @@ onMounted(refresh)
         </label>
 
         <label>类型：
-          <select :value="mediaType" @change="mediaType=($event.target as HTMLSelectElement).value as any">
+          <select v-model="mediaType">
             <option value="all">全部</option>
             <option value="image">图片</option>
             <option value="video">视频</option>
@@ -236,11 +274,10 @@ onMounted(refresh)
     </section>
 
     <p v-if="error" class="inline-error">{{ error }}</p>
-    <div v-if="!outputs.length&&!loading" class="panel empty-page">还没有生成作品。完成第一个任务后，输出会自动进入作品库。</div>
-    <div v-else-if="!filteredOutputs.length&&!loading" class="panel empty-page">当前筛选条件下没有作品。</div>
+    <div v-if="!outputs.length&&!loading" class="panel empty-page">{{ total ? '当前页没有作品。' : '当前筛选条件下没有作品。' }}</div>
 
-    <section v-else class="works-grid">
-      <article v-for="item in filteredOutputs" :key="item.id" class="panel works-card">
+    <section v-else :class="['works-grid',{loading}]">
+      <article v-for="item in outputs" :key="item.id" class="panel works-card">
         <div :class="['works-preview',`type-${item.type}`]">
           <img
             v-if="item.type==='image'"
@@ -288,6 +325,33 @@ onMounted(refresh)
         </div>
       </article>
     </section>
+
+    <section v-if="total>0" class="panel works-pagination">
+      <div class="pagination-summary">
+        <b>共 {{ total }} 条</b>
+        <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
+      </div>
+
+      <div class="pagination-pages">
+        <button :disabled="currentPage<=1 || loading" title="上一页" @click="goToPage(currentPage-1)"><ChevronLeft :size="15"/></button>
+        <button
+          v-for="page in visiblePages"
+          :key="page"
+          :class="{active:page===currentPage}"
+          :disabled="loading"
+          @click="goToPage(page)"
+        >{{ page }}</button>
+        <button :disabled="currentPage>=totalPages || loading" title="下一页" @click="goToPage(currentPage+1)"><ChevronRight :size="15"/></button>
+      </div>
+
+      <label class="page-size-control">每页
+        <select v-model.number="pageSize">
+          <option :value="8">8 条</option>
+          <option :value="12">12 条</option>
+          <option :value="16">16 条</option>
+        </select>
+      </label>
+    </section>
   </section>
 </template>
 
@@ -306,7 +370,8 @@ onMounted(refresh)
 .works-refresh{height:40px;margin-left:auto;border:0;border-radius:11px;background:#f4f6fa;color:#38435f;padding:0 14px;display:flex;align-items:center;gap:7px;font-size:11px;cursor:pointer}
 .works-refresh:disabled{opacity:.55;cursor:not-allowed}
 
-.works-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.works-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;transition:opacity .15s ease}
+.works-grid.loading{opacity:.55;pointer-events:none}
 .works-card{overflow:hidden;padding:12px;border-radius:15px;min-width:0}
 .works-preview{position:relative;height:181px;border-radius:11px;overflow:hidden;background:linear-gradient(135deg,#eef2ff,#f8eefd);display:grid;place-items:center;color:#7168dc}
 .works-preview>img,.works-preview>video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;display:block}
@@ -333,7 +398,17 @@ onMounted(refresh)
 .works-download{background:#f3f5f9;color:#35405d;display:flex;align-items:center;justify-content:center;gap:6px}
 .works-more{background:#f3f5f9;color:#35405d;display:grid;place-items:center}
 
+.works-pagination{min-height:64px;padding:10px 14px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;border-radius:14px}
+.pagination-summary{display:flex;align-items:center;gap:10px;color:#7a849e;font-size:10px}
+.pagination-summary b{color:#37415f;font-size:11px}
+.pagination-pages{display:flex;align-items:center;justify-content:center;gap:6px}
+.pagination-pages button{width:34px;height:34px;border:0;border-radius:9px;background:#f1f3f8;color:#606b86;display:grid;place-items:center;font-size:10px;font-weight:700;cursor:pointer}
+.pagination-pages button.active{background:#6557e8;color:#fff;box-shadow:0 6px 14px rgba(101,87,232,.18)}
+.pagination-pages button:disabled{opacity:.42;cursor:not-allowed}
+.page-size-control{justify-self:end;display:flex;align-items:center;gap:7px;color:#77819a;font-size:10px}
+.page-size-control select{height:34px;border:1px solid #dde2ef;border-radius:9px;background:#fff;color:#4d5872;padding:0 26px 0 9px;font-size:10px;outline:none}
+
 @media(max-width:1350px){.works-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.works-filter-row{justify-content:flex-start;flex-wrap:wrap}.works-toolbar{align-items:flex-start;flex-wrap:wrap}}
-@media(max-width:980px){.works-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:640px){.works-grid{grid-template-columns:1fr}.works-toolbar{display:grid}.works-type-tabs{overflow:auto}.works-filter-row{display:grid;grid-template-columns:1fr 1fr}.works-refresh{margin-left:0}}
+@media(max-width:980px){.works-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.works-pagination{grid-template-columns:1fr;justify-items:center}.pagination-summary,.page-size-control{justify-self:center}}
+@media(max-width:640px){.works-grid{grid-template-columns:1fr}.works-toolbar{display:grid}.works-type-tabs{overflow:auto}.works-filter-row{display:grid;grid-template-columns:1fr 1fr}.works-refresh{margin-left:0}.pagination-pages{gap:4px}.pagination-pages button{width:31px;height:31px}}
 </style>
