@@ -119,13 +119,13 @@ class Launcher(tk.Tk):
         body = tk.Frame(self, bg=BG)
         body.pack(fill="x", padx=20, pady=(0, 8))
 
-        services = self._make_column(body, "-- SERVICES --", ORANGE)
-        browser = self._make_column(body, "-- BROWSER --", GREEN)
-        status = self._make_column(body, "-- STATUS --", BLUE)
+        services_outer, services = self._make_column(body, "-- SERVICES --", ORANGE)
+        browser_outer, browser = self._make_column(body, "-- BROWSER --", GREEN)
+        status_outer, status = self._make_column(body, "-- STATUS --", BLUE)
 
-        services.grid(row=0, column=0, padx=(0, 12), sticky="n")
-        browser.grid(row=0, column=1, padx=12, sticky="n")
-        status.grid(row=0, column=2, padx=(12, 0), sticky="n")
+        services_outer.grid(row=0, column=0, padx=(0, 12), sticky="n")
+        browser_outer.grid(row=0, column=1, padx=12, sticky="n")
+        status_outer.grid(row=0, column=2, padx=(12, 0), sticky="n")
 
         self._action_button(services, "启动工作台", ORANGE, self.start_workbench).pack(fill="x", pady=4)
         self._action_button(services, "停止工作台", ORANGE, self.stop_workbench).pack(fill="x", pady=4)
@@ -178,7 +178,7 @@ class Launcher(tk.Tk):
         )
         self.footer.pack(fill="x", padx=20, pady=(18, 0))
 
-    def _make_column(self, parent: tk.Widget, title: str, accent: str) -> tk.Frame:
+    def _make_column(self, parent: tk.Widget, title: str, accent: str) -> tuple[tk.Frame, tk.Frame]:
         outer = tk.Frame(parent, bg=BG, width=205)
         outer.grid_propagate(False)
         outer.configure(width=205, height=230)
@@ -193,7 +193,7 @@ class Launcher(tk.Tk):
 
         panel = tk.Frame(outer, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
         panel.pack(fill="both", expand=True)
-        return panel
+        return outer, panel
 
     def _action_button(
         self,
