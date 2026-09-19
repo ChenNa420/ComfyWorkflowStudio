@@ -71,7 +71,7 @@ const workbenchFilter = ref<'all' | 'pending' | 'running' | 'completed' | 'faile
 const workbenchSort = ref<'asc' | 'desc'>('asc')
 const workbenchSelected = ref<number[]>([])
 const workbenchCurrentIndex = ref(0)
-const workbenchDefaultWorkflow = ref('MiniMax H3')
+const workbenchDefaultWorkflow = ref('')
 const workbenchResolution = ref('1080 × 1920 (9:16)')
 const workbenchDurationMode = ref('按分镜时长')
 const workbenchSeed = ref('')
@@ -133,6 +133,34 @@ const filteredWorkflows = computed(() => {
   return workflows.value.filter((item) => `${item.name} ${item.category} ${item.description}`.toLowerCase().includes(key))
 })
 
+const workbenchVideoWorkflows = computed(() => workflows.value.filter((item) => {
+  const capabilities = (item.capabilities || []).map(value => String(value).toLowerCase())
+  const outputs = (item.outputs || []).map(value => String(value).toLowerCase())
+  const category = String(item.category || '').toLowerCase()
+  return outputs.includes('video')
+    || capabilities.includes('video-generation')
+    || capabilities.includes('image-to-video')
+    || category.includes('video')
+}))
+
+function resolveWorkbenchWorkflowId(value: unknown) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const matched = workbenchVideoWorkflows.value.find(item => item.id === raw || item.name === raw)
+  return matched?.id || ''
+}
+
+function ensureWorkbenchDefaultWorkflow() {
+  const available = workbenchVideoWorkflows.value
+  if (!available.length) {
+    workbenchDefaultWorkflow.value = ''
+    return
+  }
+  if (!available.some(item => item.id === workbenchDefaultWorkflow.value)) {
+    workbenchDefaultWorkflow.value = available[0].id
+  }
+}
+
 const shots = [
   ['01', '早餐怪兽', 'Benny arranges the pancake.', '7 秒', 'MiniMax H3', '已完成'],
   ['02', '两只眼睛摆好了', 'Two blueberries for eyes!', '7 秒', 'MiniMax H3', '已完成'],
@@ -165,7 +193,11 @@ const workbenchShots = computed(() => {
     if (['running','generating','queued','processing'].includes(raw)) status = 'running'
     else if (['completed','complete','done','success','succeeded'].includes(raw) || shot.videoUrl || shot.video?.url) status = 'completed'
     else if (['failed','error'].includes(raw)) status = 'failed'
-    const workflow = workbenchShotWorkflows.value[shotId] || String(shot.workflow || shot.workflowName || workbenchDefaultWorkflow.value)
+    const workflow = workbenchShotWorkflows.value[shotId]
+      || resolveWorkbenchWorkflowId(shot.workflowId || shot.workflow || shot.workflowName)
+      || workbenchDefaultWorkflow.value
+      || workbenchVideoWorkflows.value[0]?.id
+      || ''
     return {
       index,
       shotId,
@@ -260,7 +292,7 @@ function queueWorkbenchGeneration(indices: number[], mode: string, replace = fal
     directorTaskId: comicEpisode.value?.directorTaskId || localStorage.getItem('cws-gpt-director-last-task-id') || '',
     mode,
     replace,
-    workflow: workbenchDefaultWorkflow.value,
+    workflow: workbenchDefaultWorkflow.value || workbenchVideoWorkflows.value[0]?.id || '',
     resolution: workbenchResolution.value,
     durationMode: workbenchDurationMode.value,
     seed: workbenchSeed.value.trim() || null,
@@ -271,7 +303,7 @@ function queueWorkbenchGeneration(indices: number[], mode: string, replace = fal
       return {
         index,
         shotId: wb?.shotId || String(shot.shotId || ''),
-        workflow: wb?.workflow || workbenchDefaultWorkflow.value,
+        workflow: wb?.workflow || workbenchDefaultWorkflow.value || workbenchVideoWorkflows.value[0]?.id || '',
         frameUrl: wb?.frameUrl || '',
         videoPrompt: shot.videoPrompt || '',
         negativePrompt: shot.negativePrompt || '',
@@ -394,6 +426,7 @@ async function loadData() {
     if (!healthResponse.ok) throw new Error(`Health HTTP ${healthResponse.status}`)
     health.value = await healthResponse.json()
     workflows.value = workflowResponse.ok ? await workflowResponse.json() : []
+    ensureWorkbenchDefaultWorkflow()
     error.value = ''
   } catch (value) {
     error.value = value instanceof Error ? value.message : '无法连接本地 API'
@@ -548,8 +581,9 @@ onUnmounted(() => {
                     <button @click.stop="openShotEditor(item.index,'edit')">编辑 Prompt ↗</button>
                   </div>
                   <span>{{ item.duration }} 秒</span>
-                  <select :value="item.workflow" @click.stop @change="setWorkbenchWorkflow(item.shotId,inputValue($event))">
-                    <option>MiniMax H3</option><option>Wan 2.2</option><option>Anime V1</option>
+                  <select :value="item.workflow" :disabled="!workbenchVideoWorkflows.length" @click.stop @change="setWorkbenchWorkflow(item.shotId,inputValue($event))">
+                    <option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option>
+                    <option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option>
                   </select>
                   <div :class="['wb-render-status',item.status]"><i></i><span>{{ workbenchStatusLabel(item.status) }}</span></div>
                   <div class="wb-result-cell">
@@ -591,7 +625,7 @@ onUnmounted(() => {
 
             <section class="panel wb-side-card wb-settings-card">
               <h3>生成设置</h3>
-              <label>视频工作流<select v-model="workbenchDefaultWorkflow"><option>MiniMax H3</option><option>Wan 2.2</option><option>Anime V1</option></select></label>
+              <label>视频工作流<select v-model="workbenchDefaultWorkflow" :disabled="!workbenchVideoWorkflows.length"><option v-if="!workbenchVideoWorkflows.length" value="">暂无可用视频工作流</option><option v-for="workflow in workbenchVideoWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
               <label>分辨率<select v-model="workbenchResolution"><option>1080 × 1920 (9:16)</option><option>1920 × 1080 (16:9)</option><option>720 × 1280 (9:16)</option></select></label>
               <label>生成时长<select v-model="workbenchDurationMode"><option>按分镜时长</option><option>统一 5 秒</option><option>统一 10 秒</option></select></label>
               <label>随机种子（可选）<input v-model="workbenchSeed" placeholder="不填则随机"/></label>
