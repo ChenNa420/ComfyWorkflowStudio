@@ -268,3 +268,39 @@
   object-fit:cover!important;
   object-position:50% 68%!important;
 }
+
+/* Workbench V6 — use the same crop geometry as the storyboard thumbnails.
+   Storyboard .thumb is 52x42 (1.238:1). Keeping that ratio shows a larger
+   vertical slice of 9:16 keyframes, which is why its character framing is
+   materially better than the previous wide workbench thumbnails. */
+.workbench-content .wb-shot-thumb{
+  position:relative;
+  width:68px!important;
+  height:55px!important;
+  min-width:68px;
+  min-height:55px;
+  overflow:hidden;
+  border-radius:9px;
+  background:#eef1f8;
+  display:grid;
+  place-items:center;
+}
+.workbench-content .wb-shot-thumb img{
+  position:absolute!important;
+  inset:0!important;
+  display:block!important;
+  width:100%!important;
+  height:100%!important;
+  object-fit:cover!important;
+  object-position:center center!important;
+  border-radius:inherit;
+}
+
+/* Use the same focal/crop behavior for the larger workbench preview surfaces,
+   but keep their reference-layout dimensions. */
+.workbench-content .wb-project-cover img,
+.workbench-content .wb-current-preview img,
+.workbench-content .wb-video-thumb img{
+  object-fit:cover!important;
+  object-position:center center!important;
+}
