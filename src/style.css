@@ -249,3 +249,22 @@
   .workbench-content .wb-shot-row{grid-template-columns:3.4% 4% 10% 24% 7% 13% 11% 11% 16.6%}
   .workbench-content .wb-shot-thumb{width:76px;height:49px}
 }
+
+/* Workbench V5 — thumbnail focal crop
+   The generated 9:16 frames place the subjects below the geometric center.
+   Use a lower-center focal point so landscape thumbnail windows show the useful
+   middle story area instead of an empty pink field. */
+.workbench-content .wb-project-cover,
+.workbench-content .wb-shot-thumb,
+.workbench-content .wb-current-preview,
+.workbench-content .wb-video-thumb{overflow:hidden}
+.workbench-content .wb-project-cover img,
+.workbench-content .wb-shot-thumb img,
+.workbench-content .wb-current-preview img,
+.workbench-content .wb-video-thumb img{
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:cover!important;
+  object-position:50% 68%!important;
+}
