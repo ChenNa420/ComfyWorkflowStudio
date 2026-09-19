@@ -68,6 +68,7 @@ const shotDraft = ref<Record<string, any> | null>(null)
 const shotEditorMode = ref<'edit' | 'view'>('edit')
 const shotEditorError = ref('')
 const workbenchFilter = ref<'all' | 'pending' | 'running' | 'completed' | 'failed'>('all')
+const workbenchSort = ref<'asc' | 'desc'>('asc')
 const workbenchSelected = ref<number[]>([])
 const workbenchCurrentIndex = ref(0)
 const workbenchDefaultWorkflow = ref('MiniMax H3')
@@ -191,9 +192,12 @@ const workbenchStatusCounts = computed(() => ({
   failed: workbenchShots.value.filter(item => item.status === 'failed').length,
 }))
 
-const filteredWorkbenchShots = computed(() => workbenchFilter.value === 'all'
-  ? workbenchShots.value
-  : workbenchShots.value.filter(item => item.status === workbenchFilter.value))
+const filteredWorkbenchShots = computed(() => {
+  const items = workbenchFilter.value === 'all'
+    ? [...workbenchShots.value]
+    : workbenchShots.value.filter(item => item.status === workbenchFilter.value)
+  return workbenchSort.value === 'asc' ? items : items.reverse()
+})
 
 const currentWorkbenchShot = computed(() => workbenchShots.value[workbenchCurrentIndex.value] || workbenchShots.value[0] || null)
 const workbenchCompletedCount = computed(() => workbenchStatusCounts.value.completed)
@@ -204,6 +208,14 @@ const workbenchSelectedVisibleAll = computed(() => {
   const visible = filteredWorkbenchShots.value.map(item => item.index)
   return visible.length > 0 && visible.every(index => workbenchSelected.value.includes(index))
 })
+
+function inputChecked(event: Event) {
+  return Boolean((event.target as HTMLInputElement | null)?.checked)
+}
+
+function inputValue(event: Event) {
+  return String((event.target as HTMLInputElement | HTMLSelectElement | null)?.value || '')
+}
 
 function setWorkbenchCurrent(index: number) {
   if (index < 0 || index >= workbenchShots.value.length) return
@@ -518,16 +530,16 @@ onUnmounted(() => {
                     <button :class="{active:workbenchFilter==='failed'}" @click="workbenchFilter='failed'">失败 {{ workbenchStatusCounts.failed }}</button>
                   </div>
                 </div>
-                <button class="secondary small">镜头顺序⌄</button>
+                <button class="secondary small" @click="workbenchSort=workbenchSort==='asc'?'desc':'asc'">镜头顺序 {{ workbenchSort==='asc'?'↑':'↓' }}</button>
               </div>
 
               <div class="wb-shot-table">
                 <div class="wb-shot-head">
-                  <label><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(($event.target as HTMLInputElement).checked)"/></label>
+                  <label><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(inputChecked($event))"/></label>
                   <span>#</span><span>画面</span><span>镜头信息</span><span>时长</span><span>工作流</span><span>状态</span><span>生成结果</span><span>操作</span>
                 </div>
                 <div v-for="item in filteredWorkbenchShots" :key="item.shotId" :class="['wb-shot-row',{current:item.index===workbenchCurrentIndex}]" @click="setWorkbenchCurrent(item.index)">
-                  <label @click.stop><input type="checkbox" :checked="workbenchSelected.includes(item.index)" @change="toggleWorkbenchShot(item.index,($event.target as HTMLInputElement).checked)"/></label>
+                  <label @click.stop><input type="checkbox" :checked="workbenchSelected.includes(item.index)" @change="toggleWorkbenchShot(item.index,inputChecked($event))"/></label>
                   <b>{{ item.id }}</b>
                   <div class="wb-shot-thumb"><img v-if="item.frameUrl" :src="item.frameUrl" :alt="`Shot ${item.id}`"/><Image v-else :size="18"/></div>
                   <div class="wb-shot-copy">
@@ -536,7 +548,7 @@ onUnmounted(() => {
                     <button @click.stop="openShotEditor(item.index,'edit')">编辑 Prompt ↗</button>
                   </div>
                   <span>{{ item.duration }} 秒</span>
-                  <select :value="item.workflow" @click.stop @change="setWorkbenchWorkflow(item.shotId,($event.target as HTMLSelectElement).value)">
+                  <select :value="item.workflow" @click.stop @change="setWorkbenchWorkflow(item.shotId,inputValue($event))">
                     <option>MiniMax H3</option><option>Wan 2.2</option><option>Anime V1</option>
                   </select>
                   <div :class="['wb-render-status',item.status]"><i></i><span>{{ workbenchStatusLabel(item.status) }}</span></div>
@@ -549,13 +561,13 @@ onUnmounted(() => {
                   <div class="wb-row-actions">
                     <button v-if="item.status==='pending'||item.status==='failed'" class="wb-generate-btn" @click.stop="generateSingleWorkbench(item.index)">立即生成</button>
                     <button class="secondary small" @click.stop="openShotEditor(item.index,'view')">查看</button>
-                    <button class="wb-more" @click.stop>•••</button>
+                    <button class="wb-more" @click.stop="openShotEditor(item.index,'view')">•••</button>
                   </div>
                 </div>
               </div>
 
               <div class="wb-batch-bar">
-                <div><input type="checkbox" :checked="workbenchSelected.length>0"/><b>已选择 {{ workbenchSelected.length }} 个镜头</b></div>
+                <div><input type="checkbox" :checked="workbenchSelectedVisibleAll" @change="toggleWorkbenchVisible(inputChecked($event))"/><b>已选择 {{ workbenchSelected.length }} 个镜头</b></div>
                 <div>
                   <button class="secondary" :disabled="!workbenchSelected.length" @click="regenerateSelectedWorkbench">↻ 重新生成选中</button>
                   <button class="secondary" :disabled="!workbenchShots.length" @click="generateFromCurrentWorkbench">▶ 从当前开始批量生成</button>
