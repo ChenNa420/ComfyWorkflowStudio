@@ -65,6 +65,7 @@ const comicEpisode = ref<Record<string, any> | null>(null)
 const comicFrameUrls = ref<Record<string, string>>({})
 const editingShotIndex = ref<number | null>(null)
 const shotDraft = ref<Record<string, any> | null>(null)
+const shotEditorMode = ref<'edit' | 'view'>('edit')
 const shotEditorError = ref('')
 
 const kidsNav: NavItem[] = [
@@ -142,13 +143,14 @@ const displayCharacters = computed(() => {
   return (comicEpisode.value.characterDefinitions || []).map((role: any) => role.name || role.id)
 })
 
-function openShotEditor(index: number) {
+function openShotEditor(index: number, mode: 'edit' | 'view' = 'edit') {
   const shot = comicEpisode.value?.shots?.[index]
   if (!shot) {
-    error.value = '当前镜头没有可编辑的漫画 Episode 数据。'
+    error.value = '当前镜头没有可用的漫画 Episode 数据。'
     return
   }
   editingShotIndex.value = index
+  shotEditorMode.value = mode
   shotEditorError.value = ''
   shotDraft.value = JSON.parse(JSON.stringify(shot))
 }
@@ -156,6 +158,7 @@ function openShotEditor(index: number) {
 function closeShotEditor() {
   editingShotIndex.value = null
   shotDraft.value = null
+  shotEditorMode.value = 'edit'
   shotEditorError.value = ''
 }
 
@@ -304,7 +307,7 @@ onUnmounted(() => {
       <template v-else-if="activePage==='workbench'">
         <section v-if="comicEpisode" class="notice"><b>当前生产来源：</b>{{ comicEpisode.title }} · {{ comicEpisode.shots?.length || 0 }} Shots。空对白和 Prompt 将保持待补充状态。</section>
         <section class="production-steps panel"><div v-for="(step,index) in ['故事创作','分镜设计','首帧生成','视频生成','字幕配音','成片输出']" :key="step" :class="['step',{active:index===3,done:index<3}]"><span>{{ index+1 }}</span><div><b>{{ step }}</b><small>{{ index<3?'已完成':index===3?'ComfyUI 生成':'待处理' }}</small></div></div></section>
-        <section class="workbench-grid"><div class="workbench-main"><section class="project-row"><article class="panel project-card"><span class="eyebrow">当前项目</span><h3>{{ comicEpisode?.title || 'EP003 · 三眼早餐怪兽' }}</h3><div class="tag-row"><span>3–6 岁</span><span>Pre-A1</span><span>6 镜头</span><span>45 秒</span><span>16:9</span></div><p>当前视频阶段默认使用 MiniMax H3，Shot 可以单独覆盖工作流。</p></article><article class="panel progress-card"><div class="ring">50%</div><div><b>3 / 6 完成</b><small>视频生成阶段</small></div></article></section><section class="panel table-panel"><div class="tabs"><button class="active">镜头列表</button><button>批量生成</button><button>ComfyUI 配置</button><button>字幕与配音</button><button>成片预览</button></div><div class="shot-table"><div class="shot-table-head"><span>#</span><span>画面</span><span>镜头描述</span><span>时长</span><span>Workflow</span><span>状态</span><span>操作</span></div><div v-for="shot in displayShots" :key="shot[0]" class="shot-table-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="17"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span>{{ shot[4] }}</span><span :class="['status-chip',shot[5]==='已完成'?'success':shot[5]==='生成中'?'running':'neutral']">{{ shot[5] }}</span><button class="secondary">{{ shot[5]==='待生成'?'生成':'查看' }}</button></div></div><div class="table-actions"><button class="secondary">重新生成选中</button><button class="secondary">从当前开始批量生成</button><button class="primary">开始整集生成</button></div></section></div><aside class="workbench-side"><section class="panel section-card"><div class="section-head"><h3>工作流选择</h3><button class="text-button" @click="navigate('workflows')">打开工作流库</button></div><div class="workflow-selected"><div class="workflow-cover"><Film :size="28"/></div><div><b>MiniMax H3 · 首帧转视频</b><p>剧集默认 · Shot04 可单独覆盖</p><div class="tag-row"><span>首帧</span><span>Prompt</span><span>5–10 秒</span></div></div></div><button class="primary wide" @click="navigate('create-task')">打开动态任务表单</button></section><section class="panel section-card"><h3>三级工作流选择</h3><div class="status-list"><div><span>系统默认</span><b>MiniMax H3</b></div><div><span>EP003 默认</span><b>MiniMax H3</b></div><div><span>Shot03 覆盖</span><b>Wan 2.2</b></div><div><span>优先级</span><b>SHOT &gt; EPISODE &gt; SYSTEM</b></div></div></section><section class="panel section-card"><h3>连续性</h3><label class="check-line"><input type="checkbox"/> 使用上一镜头最后一帧</label><div class="notice">成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</div></section></aside></section>
+        <section class="workbench-grid"><div class="workbench-main"><section class="project-row"><article class="panel project-card"><span class="eyebrow">当前项目</span><h3>{{ comicEpisode?.title || 'EP003 · 三眼早餐怪兽' }}</h3><div class="tag-row"><span>3–6 岁</span><span>Pre-A1</span><span>6 镜头</span><span>45 秒</span><span>16:9</span></div><p>当前视频阶段默认使用 MiniMax H3，Shot 可以单独覆盖工作流。</p></article><article class="panel progress-card"><div class="ring">50%</div><div><b>3 / 6 完成</b><small>视频生成阶段</small></div></article></section><section class="panel table-panel"><div class="tabs"><button class="active">镜头列表</button><button>批量生成</button><button>ComfyUI 配置</button><button>字幕与配音</button><button>成片预览</button></div><div class="shot-table"><div class="shot-table-head"><span>#</span><span>画面</span><span>镜头描述</span><span>时长</span><span>Workflow</span><span>状态</span><span>操作</span></div><div v-for="(shot,index) in displayShots" :key="shot[0]" class="shot-table-row"><b>{{ shot[0] }}</b><div class="thumb"><img v-if="shot[6]" :src="shot[6]" :alt="`Shot ${shot[0]} 关键帧`"/><Image v-else :size="17"/></div><div class="shot-copy"><strong>{{ shot[1] }}</strong><small>{{ shot[2] }}</small></div><span>{{ shot[3] }}</span><span>{{ shot[4] }}</span><span :class="['status-chip',shot[5]==='已完成'?'success':shot[5]==='生成中'?'running':'neutral']">{{ shot[5] }}</span><button class="secondary" @click="openShotEditor(index,'view')">{{ shot[5]==='待生成'?'生成':'查看' }}</button></div></div><div class="table-actions"><button class="secondary">重新生成选中</button><button class="secondary">从当前开始批量生成</button><button class="primary">开始整集生成</button></div></section></div><aside class="workbench-side"><section class="panel section-card"><div class="section-head"><h3>工作流选择</h3><button class="text-button" @click="navigate('workflows')">打开工作流库</button></div><div class="workflow-selected"><div class="workflow-cover"><Film :size="28"/></div><div><b>MiniMax H3 · 首帧转视频</b><p>剧集默认 · Shot04 可单独覆盖</p><div class="tag-row"><span>首帧</span><span>Prompt</span><span>5–10 秒</span></div></div></div><button class="primary wide" @click="navigate('create-task')">打开动态任务表单</button></section><section class="panel section-card"><h3>三级工作流选择</h3><div class="status-list"><div><span>系统默认</span><b>MiniMax H3</b></div><div><span>EP003 默认</span><b>MiniMax H3</b></div><div><span>Shot03 覆盖</span><b>Wan 2.2</b></div><div><span>优先级</span><b>SHOT &gt; EPISODE &gt; SYSTEM</b></div></div></section><section class="panel section-card"><h3>连续性</h3><label class="check-line"><input type="checkbox"/> 使用上一镜头最后一帧</label><div class="notice">成功镜头默认不自动重新生成；UNKNOWN 状态禁止自动重提。</div></section></aside></section>
       </template>
 
       <template v-else-if="activePage==='kids-works' || activePage==='works'"><OutputGallery/></template>
@@ -346,12 +349,13 @@ onUnmounted(() => {
       <p v-else class="panel empty-page">页面正在接入真实数据。</p>
 
       <div v-if="shotDraft && editingShotIndex !== null" class="shot-editor-overlay" @click.self="closeShotEditor">
-        <section class="shot-editor-panel" role="dialog" aria-modal="true" aria-label="编辑 Shot">
+        <section class="shot-editor-panel" role="dialog" aria-modal="true" :aria-label="shotEditorMode==='view'?'查看 Shot':'编辑 Shot'">
           <header class="shot-editor-head">
             <div>
-              <span class="eyebrow">SHOT EDITOR</span>
-              <h3>编辑 Shot {{ String((editingShotIndex ?? 0) + 1).padStart(2, '0') }}</h3>
-              <p>修改会同步到当前漫画 Episode，并用于后续成片工作台；已生成关键帧不会自动重生。</p>
+              <span class="eyebrow">{{ shotEditorMode==='view'?'SHOT DETAIL':'SHOT EDITOR' }}</span>
+              <h3>{{ shotEditorMode==='view'?'查看':'编辑' }} Shot {{ String((editingShotIndex ?? 0) + 1).padStart(2, '0') }}</h3>
+              <p v-if="shotEditorMode==='view'">查看当前关键帧、对白和 Prompt；需要修改时可切换到编辑模式。</p>
+              <p v-else>修改会同步到当前漫画 Episode，并用于后续成片工作台；已生成关键帧不会自动重生。</p>
             </div>
             <button class="secondary small" @click="closeShotEditor">关闭</button>
           </header>
@@ -367,24 +371,25 @@ onUnmounted(() => {
 
             <div class="shot-editor-form">
               <div class="shot-editor-grid">
-                <label>标题<input v-model="shotDraft.title"/></label>
-                <label>时长（秒）<input v-model.number="shotDraft.duration" type="number" min="0.1" max="10" step="0.5"/></label>
-                <label>说话人<input v-model="shotDraft.speaker" placeholder="无对白可留空"/></label>
+                <label>标题<input v-model="shotDraft.title" :disabled="shotEditorMode==='view'"/></label>
+                <label>时长（秒）<input v-model.number="shotDraft.duration" type="number" min="0.1" max="10" step="0.5" :disabled="shotEditorMode==='view'"/></label>
+                <label>说话人<input v-model="shotDraft.speaker" placeholder="无对白可留空" :disabled="shotEditorMode==='view'"/></label>
                 <label>Shot ID<input :value="shotDraft.shotId" disabled/></label>
               </div>
-              <label>英文对白<textarea v-model="shotDraft.english" rows="2"></textarea></label>
-              <label>中文对白<textarea v-model="shotDraft.chinese" rows="2"></textarea></label>
-              <label>关键帧描述<textarea v-model="shotDraft.keyframeDescription" rows="3"></textarea></label>
-              <label>Image Prompt<textarea v-model="shotDraft.imagePrompt" rows="6"></textarea></label>
-              <label>Video Prompt<textarea v-model="shotDraft.videoPrompt" rows="6"></textarea></label>
-              <label>Negative Prompt<textarea v-model="shotDraft.negativePrompt" rows="3"></textarea></label>
+              <label>英文对白<textarea v-model="shotDraft.english" rows="2" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>中文对白<textarea v-model="shotDraft.chinese" rows="2" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>关键帧描述<textarea v-model="shotDraft.keyframeDescription" rows="3" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Image Prompt<textarea v-model="shotDraft.imagePrompt" rows="6" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Video Prompt<textarea v-model="shotDraft.videoPrompt" rows="6" :disabled="shotEditorMode==='view'"></textarea></label>
+              <label>Negative Prompt<textarea v-model="shotDraft.negativePrompt" rows="3" :disabled="shotEditorMode==='view'"></textarea></label>
               <p v-if="shotEditorError" class="shot-editor-error">{{ shotEditorError }}</p>
             </div>
           </div>
 
           <footer class="shot-editor-actions">
-            <button class="secondary" @click="closeShotEditor">取消</button>
-            <button class="primary" @click="saveShotEditor">保存 Shot</button>
+            <button class="secondary" @click="closeShotEditor">{{ shotEditorMode==='view'?'关闭':'取消' }}</button>
+            <button v-if="shotEditorMode==='view'" class="primary" @click="shotEditorMode='edit'">编辑此 Shot</button>
+            <button v-else class="primary" @click="saveShotEditor">保存 Shot</button>
           </footer>
         </section>
       </div>
