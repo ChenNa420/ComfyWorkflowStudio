@@ -130,6 +130,7 @@ class GPTImageServiceTests(unittest.TestCase):
         self.assertEqual(env['CWS_CHATGPT_IMAGE_CDP_URL'], DEFAULT_CHATGPT_IMAGE_CDP_URL)
         self.assertEqual(env['CWS_CHATGPT_IMAGE_URL'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         self.assertTrue(env['CWS_CHATGPT_IMAGE_URL'].startswith('https://chatgpt.com/g/'))
+        self.assertIn('g-6aad4e72baa0819194cfc692ad061ac2', env['CWS_CHATGPT_IMAGE_URL'])
 
     def test_node_worker_forces_utf8_for_unicode_prompts(self):
         worker = NodeImageWorker(self.root)
@@ -272,13 +273,20 @@ class GPTImageServiceTests(unittest.TestCase):
         completed = self.service.get_job(job['jobId'])
         self.assertEqual(completed['status'], 'COMPLETED')
         self.assertEqual(completed['frame']['shotId'], 'S01')
-        self.assertEqual(completed['promptMode'], 'direct')
+        self.assertEqual(completed['promptMode'], 'keyframe_task')
         self.assertEqual(completed['promptLength'], len('A puppy in a warm kitchen'))
         self.assertEqual(self.worker.calls[0]['prompt'], 'A puppy in a warm kitchen')
-        self.assertEqual(self.worker.calls[0]['promptMode'], 'direct')
+        self.assertEqual(self.worker.calls[0]['promptMode'], 'keyframe_task')
+        self.assertEqual(self.worker.calls[0]['gptUrl'], DEFAULT_CHATGPT_IMAGE_GPT_URL)
         path, record = self.service.frame_file(self.task_id, 'S01')
         self.assertTrue(path.is_file())
         self.assertEqual(record['mime'], 'image/png')
+
+    def test_keyframe_job_can_target_explicit_faithful_gpt(self):
+        target = 'https://chatgpt.com/g/g-6aad4e72baa0819194cfc692ad061ac2-tong-yu-gong-fang-man-hua-zhong-shi-dong-hua-dao-yan'
+        self.service.create_job(self.task_id, 'S01', gpt_url=target)
+        self.assertEqual(self.worker.calls[0]['gptUrl'], target)
+        self.assertEqual(self.worker.calls[0]['promptMode'], 'keyframe_task')
 
     def test_existing_frame_requires_explicit_replace(self):
         self.service.create_job(self.task_id, 'S01')

@@ -47,11 +47,11 @@ class GPTDirectorSettings(StrictModel):
     language: str = '中英双语'
     duration: int = Field(default=30, ge=1, le=600)
     aspectRatio: str = '9:16'
-    adaptationStrength: Literal['low', 'medium', 'high'] = 'high'
+    adaptationStrength: Literal['low', 'medium', 'high'] = 'low'
     preserveVisualMood: bool = True
     preserveComposition: bool = True
-    replaceCharacters: bool = True
-    allowEndingChange: bool = True
+    replaceCharacters: bool = False
+    allowEndingChange: bool = False
     extraRequest: str = ''
 
 

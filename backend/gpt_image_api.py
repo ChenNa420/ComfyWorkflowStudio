@@ -15,6 +15,7 @@ logger = logging.getLogger("comfy.gpt_image")
 
 class GenerateFrameRequest(BaseModel):
     replace: bool = False
+    gptUrl: str | None = None
 
 
 class PrepareStoryRequest(BaseModel):
@@ -84,7 +85,7 @@ def gpt_image_router() -> APIRouter:
     @router.post('/tasks/{task_id}/shots/{shot_id}/generate')
     def generate(task_id: str, shot_id: str, payload: GenerateFrameRequest):
         try:
-            return public_job(service.create_job(task_id, shot_id, replace=payload.replace))
+            return public_job(service.create_job(task_id, shot_id, replace=payload.replace, gpt_url=payload.gptUrl))
         except GPTImageError as exc:
             fail(exc)
 

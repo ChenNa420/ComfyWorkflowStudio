@@ -25,6 +25,7 @@ test("defaults to Tongyu GPT and local CDP", () => {
   assert.equal(config.cdpUrl, DEFAULT_CHATGPT_IMAGE_CDP_URL);
   assert.equal(config.chatgptUrl, DEFAULT_CHATGPT_IMAGE_URL);
   assert.match(config.chatgptUrl, /^https:\/\/chatgpt\.com\/g\//);
+  assert.match(config.chatgptUrl, /g-6aad4e72baa0819194cfc692ad061ac2/);
 });
 
 test("allows explicit CDP opt-out", () => {
@@ -83,6 +84,25 @@ test("direct keyframe prompt is sent to GPT unchanged", () => {
     aspectRatio: "9:16",
   });
   assert.equal(value, prompt);
+});
+
+test("faithful keyframe task adds routing envelope and preserves imagePrompt verbatim", () => {
+  const prompt = "Zeenon beside the original paper bag, minimalist pink comic.";
+  const value = composeGenerationPrompt({
+    taskId: "gdt-test",
+    shotId: "shot_001",
+    prompt,
+    promptMode: "keyframe_task",
+    characterProfile: "must not be injected",
+    styleProfile: "must not be injected",
+    negativePrompt: "must not be injected",
+    aspectRatio: "9:16",
+  });
+  assert.match(value, /^TASK_MODE: KEYFRAME_IMAGE/);
+  assert.match(value, /Shot ID: shot_001/);
+  assert.match(value, /Aspect ratio: 9:16/);
+  assert.equal(value.endsWith(prompt), true);
+  assert.equal(value.includes("must not be injected"), false);
 });
 
 test("maps supported image MIME extensions", () => {

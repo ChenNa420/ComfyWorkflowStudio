@@ -62,7 +62,8 @@ const preparingGpt = ref(false)
 const collectingGpt = ref(false)
 const fetchingGptNow = ref(false)
 let storyWatchNonce = 0
-const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
+const LEGACY_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aa62443216c819181e35cd36d02e486-tong-yu-gong-fang-aidong-hua-bian-ju-dao-yan'
+const DEFAULT_GPT_DIRECTOR_URL='https://chatgpt.com/g/g-6aad4e72baa0819194cfc692ad061ac2-tong-yu-gong-fang-man-hua-zhong-shi-dong-hua-dao-yan'
 const gptUrl = ref(DEFAULT_GPT_DIRECTOR_URL)
 const webMcpAvailable = ref(false)
 const webMcpRegistered = ref(false)
@@ -115,11 +116,11 @@ const settings = ref({
   language:'中英双语',
   duration:30,
   aspectRatio:'9:16',
-  adaptationStrength:'high',
+  adaptationStrength:'low',
   preserveVisualMood:true,
   preserveComposition:true,
-  replaceCharacters:true,
-  allowEndingChange:true,
+  replaceCharacters:false,
+  allowEndingChange:false,
   extraRequest:'',
 })
 
@@ -149,7 +150,58 @@ const directorPrompt = computed(()=>{
   if(!activeTask.value)return ''
   const pages=activeTask.value.source.selectedPages.join(', ')
   const current=settings.value
-  return `你正在为 ComfyWorkflowStudio 执行儿童英语动画 GPT Director 手动任务。\n\nTask ID: ${activeTask.value.id}\nSelected pages: ${pages}\nTarget age: ${current.targetAge}\nEnglish level: ${current.level}\nStyle: ${current.style}\nLanguage: ${current.language}\nTarget duration: ${current.duration}\nAspect ratio: ${current.aspectRatio}\nAdaptation strength: ${current.adaptationStrength}\nPreserve visual mood: ${current.preserveVisualMood}\nPreserve composition reference: ${current.preserveComposition}\nReplace characters: ${current.replaceCharacters}\nAllow ending change: ${current.allowEndingChange}\nExtra request: ${current.extraRequest||''}\n\n本消息会由我手动上传所选漫画页图片。请只观察这些真实图片，不要根据文件名、页码、metadata 或历史记忆猜测画面。先综合理解所有页面中的角色、动作、场景、事件顺序、视觉氛围和构图关系，再重新创作一个适合儿童英语动画的新故事。不要机械翻译或逐格复刻。\n\n自动决定合理镜头数量，不固定 6 镜头。只返回一个完整合法 JSON 对象，不要 Markdown 代码围栏，不要解释，不要在 JSON 前后添加文字。\n\n顶层字段必须包含：sourceUnderstanding、creativeStory、characterDefinitions、sceneDefinitions、shots。字段类型必须严格遵守：sourceUnderstanding 必须是 JSON object；creativeStory 必须是 JSON object；characterDefinitions 必须是 JSON array；sceneDefinitions 必须是 JSON array；shots 必须是 JSON array。creativeStory 必须包含 title、summary、story、adaptationNotes，其中 title、summary、story 必须是 string，adaptationNotes 必须是 string array，即使只有一条说明也必须写成 ["说明"]，绝不能写成单个字符串。每个 shot 必须包含 shotId、title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。shotId 必须是非空 string 或 integer 且全局唯一；duration 必须是 number 且 > 0、<= 10；speaker 必须是 string 或 null；english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt 必须是 string；sourcePages 必须是非空 integer array，并且只能引用这些已选页：${pages}。imagePrompt 和 videoPrompt 必须非空。\n\n【JSON 合法性硬约束】最终输出必须能被标准 JSON.parse() 一次解析成功。所有字符串内部出现的英文双引号都必须转义为 \\\"，绝不能输出未转义的裸双引号。尤其是 videoPrompt 中引用英文对白时，禁止写 exactly: "Hello!"；必须写成 exactly: \\\"Hello!\\\"。如果使用 [CANONICAL_DIALOGUE] 片段，其中所有对白双引号也必须转义。不要使用智能引号代替 JSON 转义。输出前必须逐个检查所有 imagePrompt、videoPrompt、negativePrompt、english、chinese 和描述字段，确保字符串内部没有未转义的英文双引号、裸换行或非法控制字符。不要在字符串末尾留下多余逗号。\n\n【最终自检】在返回前，先在内部执行一次等价于 JSON.parse(最终全文) 的合法性检查；如果不能一次解析成功，先自行修复再输出。不要把检查过程写出来，只返回修复后的最终 JSON。\n\n请直接返回最终 JSON，工作台会自动读取、必要时自动 repair 一次并校验导入。`
+  return `TASK_MODE: STORY_JSON
+
+你正在为 ComfyWorkflowStudio 执行“漫画忠实改编 → 儿童英语动画”任务。
+
+Task ID: ${activeTask.value.id}
+Selected pages: ${pages}
+Target age: ${current.targetAge}
+English level: ${current.level}
+Style: ${current.style}
+Language: ${current.language}
+Target duration: ${current.duration}
+Aspect ratio: ${current.aspectRatio}
+Adaptation mode: faithful_story
+Adaptation strength: ${current.adaptationStrength}
+Preserve original story: true
+Preserve original characters: true
+Preserve visual mood: ${current.preserveVisualMood}
+Preserve composition reference: ${current.preserveComposition}
+Replace characters: ${current.replaceCharacters}
+Allow ending change: ${current.allowEndingChange}
+Extra request: ${current.extraRequest||''}
+
+本轮只生成 Story JSON，不生成图片。
+
+请只观察本次上传的真实漫画图片，不要根据文件名、页码、metadata、历史记忆或类似作品猜测画面。先还原原漫画正在发生的连续事件，再整理成适合 3–6 岁儿童英语动画的短故事。
+
+【忠实改编硬约束】
+- 保留原漫画主要角色、身份、角色关系和视觉特征；
+- 保留原事件顺序、原因与结果、重要场景、重要道具、冲突和结局；
+- 如果漫画是“词汇解释 + Example + 插画”，先判断多个 Example 是否属于同一条连续故事；
+- 不得把原角色替换成兔子、小狗、狐狸、熊或其他人物/动物；
+- 不得新增与原漫画无关的魔法、寻宝、比赛、任务、反派、新地点、新主角或新结局；
+- 只允许为了目标时长、Pre-A1 英语和镜头衔接做必要压缩；
+- 每个 Shot 必须对应原漫画中的真实剧情节点或必要自然过渡。
+
+【关键帧设计】
+每个 Shot 的 imagePrompt 会在后续 TASK_MODE: KEYFRAME_IMAGE 中直接用于生图。imagePrompt 必须 self-contained，明确原角色外貌、服装/毛色、场景、重要道具、角色位置、动作起始状态、原漫画视觉风格、构图与 ${current.aspectRatio} 画幅。禁止拼图、九宫格、contact sheet、storyboard、字幕、标题、logo、水印和 Shot 编号。不要写 same as above / 和上一镜头一样 这类依赖上下文的表达。
+
+自动决定合理镜头数量，不固定 6 镜头；30 秒通常建议 5–7 个 Shot，但剧情完整性优先。每个 duration 必须 > 0 且 <= 10。
+
+只返回一个完整合法 JSON 对象，不要 Markdown，不要解释，不要在 JSON 前后添加文字。顶层必须包含：sourceUnderstanding、creativeStory、characterDefinitions、sceneDefinitions、shots。
+
+sourceUnderstanding 应尽量包含：originalStorySummary、eventChain、characterRoles、importantProps、importantSettings、preservedStoryBeats、omittedNonStoryContent、visualMood、compositionReference。
+
+creativeStory 必须包含 title、summary、story、adaptationNotes；adaptationNotes 必须始终为 string array。
+
+每个 shot 必须包含：shotId、title、duration、storyPurpose、speaker、english、chinese、keyframeDescription、imagePrompt、videoPrompt、negativePrompt、sourcePages。shotId 必须全局唯一；speaker 必须为 string 或 null；sourcePages 必须为非空 integer array，且只能引用这些已选页：${pages}；imagePrompt 和 videoPrompt 必须非空。
+
+【JSON 合法性硬约束】
+最终输出必须能被标准 JSON.parse() 一次解析成功。字符串内部的英文双引号必须转义为 \\\"。尤其 videoPrompt 中引用对白时，禁止写 exactly: "Hello!"，必须写成 exactly: \\\"Hello!\\\"。不要输出裸换行、非法控制字符或末尾多余逗号。
+
+返回前请在内部完成一次等价于 JSON.parse(最终全文) 的检查；若失败先自行修复。工作台还会进行本地 repair 和严格校验。`
 })
 
 function formatBytes(value:number){
@@ -201,7 +253,7 @@ async function checkImageEngine(){
 async function startImageLogin(){
   try{
     await postJson('/api/gpt-image/login',{})
-    imageEngine.value={...imageEngine.value,message:'已启动专用 Chrome，并打开“童语工坊 · AI动画编剧导演”。请保持窗口开启，登录后点击“检测登录”。'}
+    imageEngine.value={...imageEngine.value,message:'已启动专用 Chrome，并打开“童语工坊 · 漫画忠实动画导演”。请保持窗口开启，登录后点击“检测登录”。'}
   }catch(value){
     error.value=value instanceof Error?value.message:'无法启动 ChatGPT 登录浏览器'
   }
@@ -262,7 +314,7 @@ async function generateShotFrame(shot:DirectorShot){
   }
   error.value=''
   try{
-    const job=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(activeTask.value.id)}/shots/${encodeURIComponent(shotId)}/generate`,{replace})
+    const job=await postJson(`/api/gpt-image/tasks/${encodeURIComponent(activeTask.value.id)}/shots/${encodeURIComponent(shotId)}/generate`,{replace,gptUrl:gptUrl.value.trim()||DEFAULT_GPT_DIRECTOR_URL})
     frameJobByShot.value={...frameJobByShot.value,[shotId]:job}
     notice.value=`Shot ${shotId} 的 imagePrompt 已直接发送到 GPT 图片生成队列。`
     await pollFrameJob(shotId,job.jobId)
@@ -356,7 +408,7 @@ function selectCurrentPage(){
 function saveGptUrl(){
   const value=gptUrl.value.trim()
   try{localStorage.setItem('cws-gpt-director-url',value)}catch{}
-  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已恢复默认“童语工坊 · AI动画编剧导演”地址。'
+  notice.value=value?'GPT 页面地址已保存到本浏览器。':'已恢复默认“童语工坊 · 漫画忠实动画导演”地址。'
 }
 
 function pageRef(page:number){return `P${String(page).padStart(3,'0')}`}
@@ -573,7 +625,9 @@ function persistBridgeState(){
 
 async function restoreBridgeState(){
   try{
-    gptUrl.value=localStorage.getItem('cws-gpt-director-url')||DEFAULT_GPT_DIRECTOR_URL
+    const storedGptUrl=localStorage.getItem('cws-gpt-director-url')||''
+    gptUrl.value=!storedGptUrl||storedGptUrl===LEGACY_GPT_DIRECTOR_URL?DEFAULT_GPT_DIRECTOR_URL:storedGptUrl
+    if(!storedGptUrl||storedGptUrl===LEGACY_GPT_DIRECTOR_URL)localStorage.setItem('cws-gpt-director-url',DEFAULT_GPT_DIRECTOR_URL)
     const source=sessionStorage.getItem('cws-gpt-director-source')
     if(source){const parsed=JSON.parse(source);selectedIssue.value=parsed.issue||null;selectedPages.value=Array.isArray(parsed.selectedPages)?parsed.selectedPages:[];currentPage.value=Number(parsed.currentPage)||1}
     sessionStorage.removeItem('cws-gpt-director-task');sessionStorage.removeItem('cws-gpt-director-result')
